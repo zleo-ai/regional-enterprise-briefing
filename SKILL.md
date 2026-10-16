@@ -38,7 +38,7 @@ metadata: {"version":"2.0.0","runtime":"Python 3.10+ optional; PNG export additi
 可选补充：重点企业全称、关注主题、只看政府/只看企业、阅读视角、版式。
 ```
 
-其余项可留空：企业不限、主题不限、全部公开来源、通用阅读、标准版。晨报默认昨日，周报默认上一完整ISO周，月报默认上一完整自然月，专题按用户给定起止日。
+其余项可留空：企业不限、主题不限、全部公开来源、通用阅读；版式按下文“模板”的优先级确定。晨报默认昨日，周报默认上一完整ISO周，月报默认上一完整自然月，专题按用户给定起止日。
 
 - **经济区**：按[区域预设](references/region-presets.md)展开为省市列表，在 `region_label` 记名称，范围说明写清成员。
 - **全国**：只用于行业或企业专题，必须 `scope_mode=all` 并配主题或企业，不做“全国全部新闻”。
@@ -52,7 +52,7 @@ metadata: {"version":"2.0.0","runtime":"Python 3.10+ optional; PNG export additi
 以下命令中 `$SKILL` 是技能根目录（含本文件的目录），`$RUN` 是用户工作目录下本次的运行目录（如 `简报/2026-10-15-晨报/`）。所有输出只写入 `$RUN`，不写入技能目录。Windows可用 `py -3`；无Python时按契约人工核对，并注明未运行脚本。
 
 ```bash
-python3 "$SKILL/scripts/briefing_tool.py" validate-config "$RUN/config-effective.json"
+python3 "$SKILL/scripts/briefing_tool.py" validate-config "$RUN/config-effective.json"   # 只含配置对象；来源与覆盖说明写入RUN-STATE.json
 python3 "$SKILL/scripts/briefing_tool.py" window --kind daily   --as-of 2026-10-15T07:00:00+08:00                      # 昨日
 python3 "$SKILL/scripts/briefing_tool.py" window --kind weekly  --as-of 2026-10-15T07:00:00+08:00                      # 上一完整ISO周
 python3 "$SKILL/scripts/briefing_tool.py" window --kind monthly --as-of 2026-10-15T07:00:00+08:00                      # 上一完整自然月
@@ -63,7 +63,7 @@ python3 "$SKILL/scripts/briefing_tool.py" options   # 列出报告类型、配�
 
 `--period` 格式：晨报 `YYYY-MM-DD`，周报 `YYYY-Www`，月报 `YYYY-MM`，专题 `起始日/结束日`（含首尾）。指定当前周期即得到“至今”的部分周期。`window` 输出的三个字段可直接写入 `04-final.json` 的 `period`。
 
-按[运行与证据契约](references/workflow.md)固定北京时间、发布窗口、截止时点和统计期。“本周/本月至今”生成部分周期观察稿并在首屏标明；不用事件日代替发布日。周月报优先聚合本地已有的合格晨报证据；用户直接点名要某一历史周期的报告而本地没有存档时，这个请求即视为公开补采授权：按该周期检索，`coverage.method=backfill_public`，首屏注明为事后检索。已有部分存档时先聚合，只对缺口日期补采并注明；用户说“只用已有记录”时不补采，缺档写入gaps并出观察稿。
+按[运行与证据契约](references/workflow.md)固定北京时间、发布窗口、截止时点和统计期。“本周/本月至今”生成部分周期观察稿并在首屏标明；不用事件日代替发布日。周月报优先聚合本地已有的合格晨报证据；用户直接点名要某一历史周期的报告而本地没有存档时，这个请求即视为公开补采授权：按该周期检索，`coverage.method=backfill_public`，首屏注明为事后检索。已有部分存档时先聚合，只对缺口日期补采并注明；用户说“只用已有记录”时不补采，缺档写入gaps并出观察稿。只有部分日期补采时 `coverage.method` 填 `backfill_public`，并在gaps和首屏highlights列出补采日期。
 
 离线工具只检查结构、时间和引用关系，不判断主体身份、网页真实性、来源独立性、主题语义和数字口径；校验通过不等于事实成立。
 
@@ -114,8 +114,10 @@ python3 "$SKILL/scripts/briefing_tool.py" lint --data "$RUN/04-final.json"
 
 ```bash
 python3 "$SKILL/scripts/briefing_tool.py" render --data "$RUN/04-final.json" --out "$RUN/简报.html"
-python3 "$SKILL/scripts/briefing_tool.py" render --data "$RUN/04-final.json" --out "$RUN/简报-要报.html" --layout memo --theme ink
+python3 "$SKILL/scripts/briefing_tool.py" render --data "$RUN/04-final.json" --out "$RUN/简报-要报预览.html" --layout memo --theme ink   # 仅临时预览其他版式
 ```
+
+正式版式写在 `04-final.json` 的 `presentation` 中，命令行参数只用于临时预览，避免HTML与PNG不一致。
 
 输出文件已存在时拒绝覆盖；修改后重新渲染请换新文件名（如加版本号）。
 

@@ -15,6 +15,8 @@ from urllib.parse import parse_qsl, urlsplit
 sys.dont_write_bytecode = True
 
 TZ = timezone(timedelta(hours=8), 'Asia/Shanghai')
+# 不属于Cf但同样不可见、可用来拆分违禁词的字符（组合用字形连接符、韩文填充符、盲文空白、变体选择符）。
+_HIDDEN = re.compile('[\u034f\u115f\u1160\u17b4\u17b5\u2800\u3164\uffa0\ufe00-\ufe0f\U000e0100-\U000e01ef]')
 MAX_BYTES = 256 * 1024
 MAX_REGIONS = 30
 
@@ -101,7 +103,7 @@ def text(value, path, maximum=200, empty=False):
     if type(value) is not str:
         fail(path, '必须是字符串')
     # Cf含零宽字符与双向覆盖符：会绕过措辞检查或让后续模板文字倒序显示。
-    if any(unicodedata.category(c) in ('Cc', 'Cf', 'Cs') for c in value):
+    if any(unicodedata.category(c) in ('Cc', 'Cf', 'Cs', 'Zl', 'Zp') or _HIDDEN.match(c) for c in value):
         fail(path, '字符串含控制字符、不可见格式字符或无效Unicode字符')
     value = value.strip()
     if len(value) > maximum or (not empty and not value):
@@ -300,8 +302,6 @@ def compute_window(kind, as_of, period=None):
             end_day = last_day + timedelta(days=1)
             if (end_day - start_day).days > 366:
                 fail('$.period', '专题周期不超过366个自然日')
-            if datetime.combine(end_day, time(), TZ) > now and now.timetz().replace(tzinfo=None) == time():
-                fail('$.as_of', '进行中的专题截止时点不能恰为00:00，否则无法与已完结专题区分；请使用实际运行时点')
         start = datetime.combine(start_day, time(), TZ)
         end = datetime.combine(end_day, time(), TZ)
     except ValidationError:
@@ -310,6 +310,8 @@ def compute_window(kind, as_of, period=None):
         fail('$.period', '无效周期或日期超出范围')
     if start >= now:
         fail('$.period', '不允许未来或零长度周期')
+    if kind == 'special' and end > now and now.timetz().replace(tzinfo=None) == time():
+        fail('$.as_of', '进行中的专题截止时点不能恰为00:00，否则无法与已完结专题区分；请使用实际运行时点')
     # 只输出可直接写入04-final.json period的三个字段；时区固定为北京时间。
     return {'start': start.isoformat(), 'end_exclusive': min(end, now).isoformat(), 'cutoff': now.isoformat()}
 
@@ -528,29 +530,34 @@ def validate_report(data):
 # 内容质量检查：只做可机器判断的写作规范提示，不判断真实性、独立性或主题语义。
 
 # 只匹配“本期收录N条”“政府资讯N条”这类自指计数；“政府发布12条措施”“本月3条新规施行”等不算。
-_COUNT_TAIL = r'\d+\s*(?:条|则)(?=$|[^一-鿿]|事项|信息|资讯|动态|新闻|内容)'
-_SELF = r'(?:本期|本周|本月|本次|今日|昨日|本报)(?:简报|周报|月报|日报|快报)?'
+_CJK = '[^\u4e00-\u9fff]'
+_COUNT_TAIL = r'\d+\s*(?:条|则)(?=$|' + _CJK + r'|事项|信息|资讯|动态|新闻|内容)'
+_SELF = r'(?:本期|本周|本月|本次|今日|昨日|本报)(?:简报|周报|月报|日报|晨报|要报|快报|专题)?'
 _AGG = r'(?:共计|合计|累计|共有|共)?(?:收录|核实|整理|编制|汇总|精选|包含|涉及)?了?的?'
 _NOUN = r'(?:(?:已核实|公开|重点|区域|政企)的?)?(?:事项|信息|资讯|动态|新闻|内容|要闻)'
-COUNT_SUMMARY = re.compile(_SELF + _AGG + _NOUN + r'?\s*\d+\s*(?:条|则)(?=$|[^一-鿿]|' + _NOUN + r'|中)'
-                           + r'|(?:本期|本周|本月|本报)(?:简报|周报|月报)?' + _AGG + r'\d+\s*项(?=$|[^一-鿿]|' + _NOUN + r')'
+COUNT_SUMMARY = re.compile(_SELF + _AGG + _NOUN + r'?\s*\d+\s*(?:条|则)(?=$|' + _CJK + r'|' + _NOUN + r'|中(?=[，,、：:]|政府|企业|其他|有|包括))'
+                           + r'|(?:本期|本周|本月|本报)(?:简报|周报|月报)?(?:共计|共有|共)?(?:收录|核实|整理|汇总|精选)?\d+\s*项(?=$|' + _CJK + r'|' + _NOUN + r')'
                            + r'|(?:政府|企业|其他)(?:资讯|来源|类)\s*' + _COUNT_TAIL)
-PROCESS_NOTES = (r'编码占位', r'占位符', r'证据根', r'(?:抓取|检索)(?:时间|日期|时点|于)', r'采集(?:时间|日期|时点)', r'列表页?日期',
+PROCESS_NOTES = (r'编码占位', r'占位符', r'证据根', r'(?:抓取|检索)(?:时间|日期|时点|于)', r'(?<![息品据名保])采集(?:时间|日期|时点)', r'列表页?日期',
                  r'爬取', r'采集脚本', r'非承载网站', r'精确分配', r'已标注\s*\d+\s*/\s*\d+', r'retrieved_at', r'placeholder')
 # 推断性措辞：任何字段都不允许。
-CREDIT_INFERENCE = (r'可授信', r'建议授信', r'授信建议', r'额度建议', r'(?<!合理)贷款需求(?!指数)', r'融资需求旺盛', r'营销机会', r'营销建议',
-                    r'营销切入', r'抢占客户', r'客户经理可', r'建议(?:由)?客户经理')
+CREDIT_INFERENCE = (r'可授信', r'建议授信', r'授信建议', r'额度建议', r'营销机会', r'营销建议', r'营销切入', r'抢占客户', r'客户经理可',
+                    r'建议(?:由)?客户经理', r'建议[^。；，,]{0,8}拜访', r'(?:授信|营销)潜力', r'重点营销(?:对象|客户)')
 # 同样的推断，但这些词也常见于事实报道（领导走访企业、满足融资需求的政策），只在分析类文字中报错。
-CREDIT_INFERENCE_ANALYSIS = (r'拜访客户', r'上门拜访', r'(?:融资|资金|贷款|信贷)需求(?:旺盛|较大|较强)', r'授信潜力', r'营销潜力',
-                             r'(?:可|建议|宜)(?:重点|优先|择机)营销', r'业务切入点')
+# 贷款需求等词也常见于政策与统计事实（“满足合理的贷款需求”“贷款需求指数”），只在分析类文字中报错。
+CREDIT_INFERENCE_ANALYSIS = (r'拜访客户', r'上门拜访', r'贷款需求', r'(?:融资|资金|信贷)需求(?:旺盛|较大|较强)',
+                             r'(?:可|可以|建议|宜)(?:重点|优先|择机)?营销', r'业务切入点')
 # 可能是公开披露事实（如银政签约“意向授信额度”），只在分析类文字中提醒。
 CREDIT_FACT = (r'授信额度', r'放款')
-INVESTMENT_ADVICE = (r'建议(?:买入|增持|卖出|减持)', r'推荐买入', r'目标价(?!格)', r'(?<![“"「『‘])稳赚', r'值得投资',
-                     r'(?:买入|增持|减持|卖出)[”"」]?评级', r'逢低(?:布局|买入|吸纳)', r'(?:适当|逢低|继续)加仓', r'股价有望')
+INVESTMENT_ADVICE = (r'建议(?:买入|增持|卖出|减持)', r'推荐买入', r'目标价(?!格(?:保险|补贴|政策|制度|改革|机制))', r'值得投资',
+                     r'(?:买入|增持|减持|卖出|推荐|强烈推荐|优于大市|跑赢行业)[”"」]?(?:（[^）]{0,4}）)?评级', r'投资评级', r'逢低(?:布局|买入|吸纳)',
+                     r'逢高减持', r'择机建仓', r'(?:建议|可|宜|适当|适度|逢低|考虑|择机)加仓', r'股价有望')
+# 稳赚：风险提示、判决中引用的诈骗话术不算（同一段含警惕、提示、宣判等词时跳过）。
+_FRAUD_CONTEXT = re.compile(r'警惕|谨防|提示|提醒|诈骗|非法集资|吸收公众存款|处罚|宣判|所谓|话术|虚假宣传')
 # 风险提示、处罚事实中常引用的说法，只在分析类文字中报错。
-INVESTMENT_ADVICE_ANALYSIS = (r'收益承诺',)
+INVESTMENT_ADVICE_ANALYSIS = (r'收益承诺', r'继续加仓')
 HYPE = (r'重磅', r'炸裂', r'震撼', r'史上最', r'全面爆发', r'爆发式', r'王炸', r'必将', r'(?<![盈获毛净])利好', r'利空(?!间)', r'狂飙', r'血洗')
-_INVISIBLE = re.compile(r'[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]')
+_INVISIBLE = re.compile('[\u00ad\u034f\u115f\u1160\u17b4\u17b5\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\u2800\u3164\ufe00-\ufe0f\ufeff\uffa0]')
 
 
 def lint_report(data):
@@ -567,15 +574,20 @@ def lint_report(data):
             if found:
                 yield found.group(0)
 
-    def scan(value, path, process=False, analysis=False):
-        """所有会出现在页面上的文字都查推断与渲染措辞；process只查读者正文，analysis查分析类文字。"""
+    def scan(value, path, process=False, analysis=False, quoted=False):
+        """所有会出现在页面上的文字都查推断与渲染措辞；process只查读者正文，analysis查分析类文字；
+        quoted用于来源原题：照录原文，推断与建议措辞只提醒不报错。"""
         value = _INVISIBLE.sub('', value or '')
         if not value:
             return
+        level = 'warning' if quoted else 'error'
         for word in matches(CREDIT_INFERENCE + (CREDIT_INFERENCE_ANALYSIS if analysis else ()), value):
-            add('error', path, f'含“{word}”：不得从公开信息推断贷款需求、授信或营销安排')
-        for word in matches(INVESTMENT_ADVICE + (INVESTMENT_ADVICE_ANALYSIS if analysis else ()), value):
-            add('error', path, f'含“{word}”：不得给出投资建议或收益判断')
+            add(level, path, f'含“{word}”：不得从公开信息推断贷款需求、授信或营销安排')
+        advice = list(matches(INVESTMENT_ADVICE + (INVESTMENT_ADVICE_ANALYSIS if analysis else ()), value))
+        if '稳赚' in value and not _FRAUD_CONTEXT.search(value):
+            advice.append('稳赚')
+        for word in advice:
+            add(level, path, f'含“{word}”：不得给出投资建议或收益判断')
         for word in matches(HYPE, value):
             add('warning', path, f'含“{word}”：避免渲染性或带交易含义的措辞')
         if analysis:
@@ -615,6 +627,7 @@ def lint_report(data):
         scan(value, '$.summary.text', process=True)
     titles = {}
     themes = set()
+    seen_labels = set()
     for i, item in enumerate(items):
         p = f'$.items[{i}]'
         title = item['title'].strip()
@@ -626,11 +639,15 @@ def lint_report(data):
             add('warning', p + '.title', f'与{titles[title]}标题重复，确认是否同一事件应合并')
         titles.setdefault(title, p)
         scan(title, p + '.title', process=True)
-        scan(item['section'], p + '.section', process=True)
+        if item['section'] not in seen_labels:
+            seen_labels.add(item['section'])
+            scan(item['section'], p + '.section', process=True)
         for key in ('theme', 'stage', 'topic', 'region', 'enterprise'):
             scan(item.get(key, ''), f'{p}.{key}')
         for j, source in enumerate(item['sources']):
-            scan(source['name'], f'{p}.sources[{j}].name')
+            if source['name'] not in seen_labels:
+                seen_labels.add(source['name'])
+                scan(source['name'], f'{p}.sources[{j}].name', quoted=True)
         missing = [key for key in ('theme', 'stage', 'publisher_type') if key not in item]
         if missing:
             add('warning', p, '缺少分类字段：' + '、'.join(missing) + '；新编报告应逐条填齐')
@@ -693,7 +710,22 @@ def render_report(data, theme=None, layout=None, color_scheme=None):
     return design.render_report(data, presentation, AUDIENCE_LABELS[data['audience']])
 
 
+def configure_streams():
+    """非UTF-8控制台（如英文Windows）下不因中文报错；JSON输出另用ensure_ascii保持有效。"""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            try:
+                stream.reconfigure(errors='backslashreplace')
+            except (ValueError, OSError):
+                pass
+
+
+def stdout_is_utf8():
+    return (getattr(sys.stdout, 'encoding', '') or '').lower().replace('-', '') in ('utf8', 'utf8sig')
+
+
 def main(argv=None):
+    configure_streams()
     parser = argparse.ArgumentParser(description='公开简报离线辅助工具')
     sub = parser.add_subparsers(dest='command', required=True)
     validate = sub.add_parser('validate-config')
@@ -713,13 +745,6 @@ def main(argv=None):
     lint.add_argument('--strict', action='store_true', help='有warning时也返回1')
     sub.add_parser('options')
     args = parser.parse_args(argv)
-    for stream in (sys.stdout, sys.stderr):
-        # 非UTF-8控制台（如英文Windows）下用\uXXXX转义输出，JSON仍然有效，不因编码报错。
-        if hasattr(stream, 'reconfigure'):
-            try:
-                stream.reconfigure(errors='backslashreplace')
-            except (ValueError, OSError):
-                pass
     try:
         if args.command == 'validate-config':
             result = validate_config(load_json(args.path))
@@ -730,7 +755,7 @@ def main(argv=None):
                       'color_schemes': list(COLOR_SCHEMES), 'charts': list(CHART_KINDS), 'audiences': AUDIENCE_LABELS}
         elif args.command == 'lint':
             result = lint_report(load_json(args.data))
-            print(json.dumps(result, ensure_ascii=False, indent=2))
+            print(json.dumps(result, ensure_ascii=not stdout_is_utf8(), indent=2))
             return 1 if result['errors'] or (args.strict and result['warnings']) else 0
         else:
             output = render_report(load_json(args.data), args.theme, args.layout, args.color_scheme)
@@ -742,7 +767,7 @@ def main(argv=None):
             except OSError:
                 fail('$.out', '无法创建输出文件')
             return 0
-        print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
+        print(json.dumps(result, ensure_ascii=not stdout_is_utf8(), indent=2, allow_nan=False))
         return 0
     except (ValidationError, RecursionError) as exc:
         print(str(exc) if isinstance(exc, ValidationError) else '$: JSON嵌套过深', file=sys.stderr)

@@ -1208,7 +1208,7 @@ class SecondReviewRegressionTests(unittest.TestCase):
         found = self.lint_levels(data)
         self.assertIn(('error', '$.items[0].section'), found)
         self.assertIn(('warning', '$.items[0].section'), found)
-        self.assertIn(('error', '$.items[0].sources[0].name'), found)
+        self.assertIn(('warning', '$.items[0].sources[0].name'), found)  # 来源原题照录，只提醒
         data = self.clean()
         data['items'][0]['analysis'] = '抓取时间为10月14日，00:00为编码占位。'
         self.assertIn(('warning', '$.items[0].analysis'), self.lint_levels(data))
@@ -1237,7 +1237,7 @@ class SecondReviewRegressionTests(unittest.TestCase):
         rendered = tool.render_report(report(), layout='memo')
         self.assertIn('<span class="nobr">（2024-02-29发布）</span>', rendered)
         self.assertIn('<span class="nobr">一手来源已核实</span>', rendered)
-        self.assertIn('事件日期：<span class="nobr">2024-02-29</span>', rendered)
+        self.assertIn('<span class="nobr">事件日期：</span><span class="nobr">2024-02-29</span>', rendered)
 
     def test_live_public_method(self):
         data = report()
@@ -1268,6 +1268,65 @@ class SecondReviewRegressionTests(unittest.TestCase):
         self.assertIn('details::details-content{content-visibility:visible', css)
         self.assertIn('.item-grid>.item{padding:18px 16px}', css)
         self.assertTrue(tool.sys.dont_write_bytecode)
+
+
+class VerificationRoundTests(unittest.TestCase):
+    """修复复核轮发现的回归。"""
+
+    def findings(self, field, text):
+        data = report()
+        data['items'][0].update(theme='a', stage='b', publisher_type='gov')
+        if field == 'summary':
+            data['summary'] = {'text': text, 'evidence_ids': ['item-1']}
+            path = '$.summary.text'
+        else:
+            data['items'][0][field] = text
+            path = f'$.items[0].{field}'
+        return [f['level'] for f in tool.lint_report(data)['findings'] if f['path'] == path]
+
+    def test_factual_text_stays_clean(self):
+        for field, text in (('summary', '今日2条中欧班列从赣州国际陆港发车，满载电子产品驶往汉堡，标志着线路班次进一步加密，相关企业物流成本有望下降。'),
+                            ('reader_summary', '市医保局启动参保信息采集时间安排，居民可在线登记。'),
+                            ('reader_summary', '市金融监管局提醒群众警惕以“高收益、稳赚不赔”为诱饵的非法集资活动。'),
+                            ('reader_summary', '人民银行调查显示，三季度基础设施贷款需求有所回落。'),
+                            ('reader_summary', '某基金三季度继续加仓示例股份。')):
+            with self.subTest(text=text):
+                self.assertNotIn('error', self.findings(field, text))
+
+    def test_advice_and_counts_still_caught(self):
+        for field, text in (('summary', '本期晨报共收录12条，其中政府发布8条。'), ('reader_analysis', '给予目标价格35元。'),
+                            ('reader_analysis', '建议加仓示例股份。'), ('reader_analysis', '首次覆盖给予“强烈推荐”评级。'),
+                            ('reader_summary', '建议近期上门拜访企业财务负责人。'), ('reader_summary', '该企业具备授信潜力。'),
+                            ('reader_analysis', '该理财产品稳赚不赔。'), ('reader_analysis', '居民贷款需求较大，可作为营销重点。')):
+            with self.subTest(text=text):
+                self.assertIn('error', self.findings(field, text))
+
+    def test_hidden_non_format_characters_rejected(self):
+        for value in ('可ㅤ授信', '建议͏买入', '甲⠀乙', '甲 乙'):
+            data = report()
+            data['items'][0]['analysis'] = value
+            with self.subTest(value=repr(value)), self.assertRaises(tool.ValidationError):
+                tool.validate_report(data)
+
+    def test_repeated_section_reported_once(self):
+        data = multi_report(4)
+        for item in data['items']:
+            item['section'] = '政府资讯 · 营销机会'
+        paths = [f['path'] for f in tool.lint_report(data)['findings'] if f['path'].endswith('.section')]
+        self.assertEqual(len(paths), 1)
+
+    def test_future_special_reports_future_not_midnight(self):
+        with self.assertRaisesRegex(tool.ValidationError, '未来'):
+            tool.compute_window('special', '2026-10-16T00:00:00+08:00', '2026-11-01/2026-11-30')
+
+    def test_json_output_valid_on_ascii_console(self):
+        import subprocess, os, sys
+        env = dict(os.environ, PYTHONIOENCODING='ascii')
+        for args in (['options'], ['-h']):
+            proc = subprocess.run([sys.executable, '-B', str(SCRIPT)] + args, capture_output=True, env=env)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+        proc = subprocess.run([sys.executable, '-B', str(SCRIPT), 'options'], capture_output=True, env=env)
+        self.assertIn('通用阅读', json.loads(proc.stdout.decode('ascii'))['audiences'].values())
 
 class ExampleFileTests(unittest.TestCase):
     def test_example_configs_validate(self):

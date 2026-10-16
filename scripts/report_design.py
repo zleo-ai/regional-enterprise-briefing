@@ -369,7 +369,7 @@ def card_item(item, anchor):
     if analysis:
         parts.append('<div class="analysis"><h5>研究关注</h5><p>' + esc(analysis) + '</p></div>')
     topic = item['topic'] if item['topic'].strip() != item.get('theme', '').strip() else ''
-    meta = [('企业', item['enterprise']), ('议题', topic), ('事件日期', item['event_date'] or '未披露')]
+    meta = [('企业', item['enterprise'].strip()), ('议题', topic), ('事件日期', item['event_date'] or '未披露')]
     parts.append('<dl class="metadata">' + ''.join('<div><dt>' + label + '</dt><dd>' + esc(value) + '</dd></div>' for label, value in meta if value)
                  + '</dl><div class="sources"><span class="verified">' + CHECK + verified_label(item) + '</span>')
     for source in item['sources']:
@@ -384,7 +384,7 @@ def compact_item(item, anchor):
     meta = [esc(item['region']), '发布 ' + esc(moment(item['published_at']).strftime('%m-%d'))]
     if item.get('stage'):
         meta.append('阶段 ' + esc(item['stage']))
-    if item['enterprise']:
+    if item['enterprise'].strip():
         meta.append(esc(item['enterprise']))
     parts = ['<article class="item compact-item" id="' + anchor + '"><span class="item-no">' + number + '</span><div class="item-main"><h4>'
              + esc(item['title']) + '</h4><p class="item-meta">' + badges(item) + ''.join('<span>' + value + '</span>' for value in meta)
@@ -407,7 +407,7 @@ def memo_item(item, anchor):
         parts.append('<p class="memo-analysis"><b>研究关注：</b>' + esc(analysis) + '</p>')
     meta = [('地区', esc(item['region'])), ('阶段', esc(item.get('stage', ''))), ('主题', esc(item.get('theme', ''))),
             ('企业', esc(item['enterprise'])), ('事件日期', '<span class="nobr">' + esc(item['event_date'] or '未披露') + '</span>')]
-    parts.append('<p class="memo-meta">' + '　'.join(label + '：' + value for label, value in meta if value) + '</p>')
+    parts.append('<p class="memo-meta">' + '　'.join('<span class="nobr">' + label + '：</span>' + value for label, value in meta if value.strip()) + '</p>')
     sources = '；'.join('<a href="' + esc(source['url']) + '" rel="noopener noreferrer">' + esc(source['name']) + '</a><span class="nobr">（'
                        + esc(moment(source['published_at']).strftime('%Y-%m-%d')) + '发布）</span>' for source in item['sources'])
     parts.append('<p class="memo-source">来源：' + sources + '　<span class="nobr">' + verified_label(item) + '</span></p></article>')

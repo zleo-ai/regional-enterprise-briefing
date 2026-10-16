@@ -7,7 +7,7 @@ import struct
 import sys
 
 sys.dont_write_bytecode = True
-from briefing_tool import LAYOUTS, THEMES, ValidationError, load_json, render_report
+from briefing_tool import LAYOUTS, THEMES, ValidationError, configure_streams, load_json, render_report, stdout_is_utf8
 
 MAX_RENDER_PIXELS = 90_000_000
 MAX_RENDER_HEIGHT = 60_000
@@ -101,6 +101,7 @@ def export_png(data_path, out_path, width=540, scale=2, browser_channel='auto', 
 
 
 def main(argv=None):
+    configure_streams()
     parser = argparse.ArgumentParser(description='按用户要求导出本地PNG长图，HTML页面不含导出按钮')
     parser.add_argument('--data', required=True, help='已核实的04-final.json')
     parser.add_argument('--out', required=True, help='不存在的.png路径')
@@ -113,7 +114,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         result = export_png(args.data, args.out, args.width, args.scale, args.browser_channel, args.theme, args.layout, args.executable_path)
-        print(json.dumps(result, ensure_ascii=False))
+        print(json.dumps(result, ensure_ascii=not stdout_is_utf8()))
         return 0
     except (ValidationError, OSError):
         # 路径与浏览器底层报错可能带用户目录，只输出受控诊断。
