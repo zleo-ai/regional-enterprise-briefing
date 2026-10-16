@@ -230,6 +230,7 @@ footer>p:first-child{margin-bottom:5px;color:var(--ink-2)}
   .stats>div:nth-child(3){border-left:0}
   .stats>div:nth-child(n+3){border-top:1px solid var(--line)}
   .charts,.charts.n2,.charts.n4{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .layout-compact .charts{grid-template-columns:1fr}
   .item-grid,.feature-grid{grid-template-columns:1fr}
   .glance>p{font-size:18px}
 }
@@ -278,8 +279,8 @@ body.poster .chart-data{display:none}
 @page{size:A4;margin:16mm 14mm}
 @media print{
   body{background:#fff;color:#222;font-size:12pt}
-  .page{width:100%;margin:0;padding:0;border-top-width:3px;box-shadow:none}
-  .layout-memo .page{padding:0}
+  .page,.layout-compact .page,.layout-memo .page{width:100%;margin:0;padding:0;border-top-width:3px;box-shadow:none}
+  .layout-memo .page{border-top:0}
   .item-grid,.feature-grid{grid-template-columns:1fr}
   .charts{grid-template-columns:repeat(2,minmax(0,1fr))}
   .item,.feature,.chart,.figure,.watch-list li{break-inside:avoid}

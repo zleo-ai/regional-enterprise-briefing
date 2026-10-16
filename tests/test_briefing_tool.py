@@ -1016,6 +1016,104 @@ class LintTests(unittest.TestCase):
         self.assertIn('special', value['kinds'])
 
 
+
+class ReviewRegressionTests(unittest.TestCase):
+    """独立审查发现的问题回归。"""
+
+    def lint_levels(self, data):
+        return [(f['level'], f['path']) for f in tool.lint_report(data)['findings']]
+
+    def test_policy_counts_and_terms_are_not_lint_errors(self):
+        data = report()
+        data['items'][0].update(theme='a', stage='b', publisher_type='gov')
+        for text in ('甲市政府发布12条措施支持制造业数字化转型，明确设立专项资金并自印发之日起施行；同日乙市启动首批项目申报。',
+                     '国务院今日发布24条措施稳外贸，示例省同步出台配套细则，两项文件均已公开原文并明确执行期限与适用范围。'):
+            data['summary'] = {'text': text, 'evidence_ids': ['item-1']}
+            with self.subTest(text=text):
+                self.assertNotIn(('error', '$.summary.text'), self.lint_levels(data))
+        data['items'][0]['reader_summary'] = '示例银行与省政府签约，提供意向授信额度1000亿元，并推广智能抓取机器人等颠覆性技术应用。'
+        self.assertEqual(tool.lint_report(data)['errors'], 0, tool.lint_report(data))
+        self.assertNotIn(('warning', '$.items[0].reader_summary'), self.lint_levels(data))
+
+    def test_self_referential_counts_still_flagged(self):
+        data = report()
+        for text in ('本期共收录12条，政府资讯8条，企业资讯4条。', '本周12条事项，主要集中在制造业。', '政府资讯8条、企业来源4条。'):
+            data['summary'] = {'text': text, 'evidence_ids': ['item-1']}
+            with self.subTest(text=text):
+                self.assertIn(('error', '$.summary.text'), self.lint_levels(data))
+
+    def test_every_published_field_is_scanned(self):
+        data = report()
+        data['items'][0].update(theme='a', stage='b', publisher_type='gov', reader_analysis='关注正式批复。',
+                                analysis='该企业融资需求旺盛，客户经理可上门拜访。')
+        found = self.lint_levels(data)
+        self.assertIn(('error', '$.items[0].analysis'), found)
+        data = report()
+        data['items'][0]['title'] = '重磅！示例公司公告，建议买入'
+        data['key_figures'] = [{'label': '目标价', 'value': '目标价35元', 'note': '研报口径', 'evidence_ids': ['item-1']}]
+        found = self.lint_levels(data)
+        self.assertIn(('error', '$.items[0].title'), found)
+        self.assertIn(('warning', '$.items[0].title'), found)
+        self.assertIn(('error', '$.key_figures[0].value'), found)
+        self.assertIn(('error', '$.key_figures[0].label'), found)
+
+    def test_credit_fact_words_warn_only_in_analysis(self):
+        data = report()
+        data['items'][0].update(theme='a', stage='b', publisher_type='gov', reader_analysis='后续关注授信额度的实际放款进度。')
+        found = self.lint_levels(data)
+        self.assertIn(('warning', '$.items[0].reader_analysis'), found)
+        self.assertNotIn('error', [level for level, _ in found])
+
+    def test_utc_publication_compares_beijing_date(self):
+        data = report()
+        data['items'][0].update(published_at='2024-02-28T20:00:00Z', event_date='2024-02-29', theme='a', stage='b', publisher_type='gov')
+        data['items'][0]['sources'][0]['published_at'] = '2024-02-28T20:00:00Z'
+        self.assertNotIn(('info', '$.items[0].event_date'), self.lint_levels(data))
+
+    def test_special_in_progress_must_be_observation(self):
+        data = report()
+        data.update(kind='special')
+        data['period'].update(start='2024-02-01T00:00:00+08:00', end_exclusive='2024-02-29T13:37:00+08:00', cutoff='2024-02-29T13:37:00+08:00')
+        data['coverage'].update(expected_days=29, available_days=29)
+        with self.assertRaisesRegex(tool.ValidationError, '部分周期'):
+            tool.validate_report(data)
+        data['status'] = 'observation'
+        with self.assertRaisesRegex(tool.ValidationError, 'gaps'):
+            tool.validate_report(data)
+        data['coverage']['gaps'] = ['专题周期未结束，截至发稿。']
+        rendered = tool.render_report(data)
+        self.assertIn('专题观察（进行中）', rendered)
+        self.assertIn('截至2月29日 13:37', rendered)
+        data['period']['cutoff'] = '2024-03-05T00:00:00+08:00'
+        with self.assertRaisesRegex(tool.ValidationError, '部分周期'):
+            tool.validate_report(data)
+
+    def test_window_errors_are_specific(self):
+        for period, message in ((None, '专题周期必须'), ('2024-02-29/2024-02-01', '早于'), ('2023-01-01/2024-01-02', '366')):
+            with self.subTest(period=period), self.assertRaisesRegex(tool.ValidationError, message):
+                tool.compute_window('special', '2024-03-15T09:00:00+08:00', period)
+        with self.assertRaisesRegex(tool.ValidationError, 'YYYY-Www'):
+            tool.compute_window('weekly', '2024-03-15T09:00:00+08:00', '2024-10')
+
+    def test_legacy_categories_use_neutral_colour_and_fold(self):
+        data = report()
+        base = data['items'][0]
+        data['items'] = []
+        for n, section in enumerate(['政府资讯 · 发改', '甲类', '乙类', '丙类', '丁类', '戊类']):
+            item = copy.deepcopy(base)
+            item.update(id=f'item-{n}', event_key=f'event-{n}', section=section)
+            data['items'].append(item)
+        block = tool.render_report(data).split('<figure class="chart chart-stack"', 1)[1].split('</figure>', 1)[0]
+        self.assertEqual(re.findall(r'class="seg (s\d)"', block), ['s1', 's0', 's0', 's0'])
+        self.assertIn('其余3类', block)
+
+    def test_print_rules_reset_every_layout(self):
+        css = (ROOT / 'assets' / 'report.css').read_text(encoding='utf-8')
+        print_block = css.split('@media print{', 1)[1]
+        self.assertIn('.page,.layout-compact .page,.layout-memo .page{width:100%;margin:0;padding:0', print_block)
+        tablet = css.split('@media(max-width:900px){', 1)[1].split('}\n@media', 1)[0]
+        self.assertIn('.layout-compact .charts{grid-template-columns:1fr}', tablet)
+
 class ExampleFileTests(unittest.TestCase):
     def test_example_configs_validate(self):
         paths = sorted((ROOT / 'examples').glob('config-*.json'))

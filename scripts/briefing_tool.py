@@ -287,6 +287,8 @@ def compute_window(kind, as_of, period=None):
                 fail('$.period', '专题周期不超过366个自然日')
         start = datetime.combine(start_day, time(), TZ)
         end = datetime.combine(end_day, time(), TZ)
+    except ValidationError:
+        raise
     except (ValueError, OverflowError):
         fail('$.period', '无效周期或日期超出范围')
     if start >= now:
@@ -388,7 +390,8 @@ def validate_report(data):
         fail('$.period', '周期超出日期范围')
     if end > full_end:
         fail('$.period.end_exclusive', '超出所选报告类型的周期')
-    partial = end < full_end
+    # 专题以结束日次日00:00为完整终点；不在00:00结束表示截至发稿的进行中周期，同样按部分周期处理。
+    partial = end < full_end or (kind == 'special' and end.timetz().replace(tzinfo=None) != time())
     if partial and (end != cutoff or status != 'observation'):
         fail('$.period', '部分周期必须截至cutoff并标为观察稿')
     actual_days = (end.date() - start.date()).days + (end.timetz().replace(tzinfo=None) != time())
@@ -508,11 +511,19 @@ def validate_report(data):
 # ---------------------------------------------------------------------------
 # 内容质量检查：只做可机器判断的写作规范提示，不判断真实性、独立性或主题语义。
 
-COUNT_SUMMARY = re.compile(r'(本期|本周|本月|今日|昨日)(共|合计)?(收录|核实|整理|发布|编制)?\s*\d+\s*(条|则)|(政府|企业|其他)(资讯|发布|来源)\s*\d+\s*条')
-PROCESS_NOTES = ('编码占位', '占位符', '证据根', '抓取', '爬取', '采集脚本', '检索时点', '非承载网站', '精确分配', '已标注', 'retrieved_at', 'placeholder')
-CREDIT_MARKETING = ('授信额度', '可授信', '放款', '贷款需求', '融资需求旺盛', '营销机会', '营销建议', '营销切入', '抢占客户', '拜访客户', '上门拜访', '客户经理可')
-INVESTMENT_ADVICE = ('建议买入', '建议增持', '建议卖出', '目标价', '推荐买入', '值得投资', '稳赚', '收益承诺')
-HYPE = ('重磅', '炸裂', '震撼', '史上最', '全面爆发', '爆发式', '王炸', '必将', '颠覆', '利好', '利空', '狂飙', '血洗')
+# 只匹配“本期收录N条”“政府资讯N条”这类自指计数；“政府发布12条措施”等政策名称不算。
+_COUNT_TAIL = r'\d+\s*(?:条|则)(?=$|[^一-鿿]|事项|信息|资讯|动态|新闻|内容)'
+COUNT_SUMMARY = re.compile(r'(?:本期|本周|本月|本次|今日|昨日|本报)(?:共计|合计|共)?(?:收录|核实|整理|编制|汇总|包含|涉及)?(?:已核实)?\s*' + _COUNT_TAIL
+                           + r'|(?:政府|企业|其他)(?:资讯|来源)\s*' + _COUNT_TAIL)
+PROCESS_NOTES = (r'编码占位', r'占位符', r'证据根', r'抓取(?:时间|日期|时点|于)', r'爬取', r'采集脚本', r'检索时点', r'非承载网站',
+                 r'精确分配', r'已标注\s*\d+\s*/\s*\d+', r'retrieved_at', r'placeholder')
+# 推断性措辞：任何字段都不允许。
+CREDIT_INFERENCE = ('可授信', '建议授信', '授信建议', '额度建议', '贷款需求', '融资需求旺盛', '营销机会', '营销建议', '营销切入',
+                    '抢占客户', '拜访客户', '上门拜访', '客户经理可')
+# 可能是公开披露事实（如银政签约“意向授信额度”），只在分析类文字中提醒。
+CREDIT_FACT = ('授信额度', '放款')
+INVESTMENT_ADVICE = ('建议买入', '建议增持', '建议卖出', '建议减持', '目标价', '推荐买入', '值得投资', '稳赚', '收益承诺')
+HYPE = ('重磅', '炸裂', '震撼', '史上最', '全面爆发', '爆发式', '王炸', '必将', '利好', '利空', '狂飙', '血洗')
 
 
 def lint_report(data):
@@ -523,10 +534,11 @@ def lint_report(data):
     def add(level, path, message):
         findings.append({'level': level, 'path': path, 'message': message})
 
-    def scan(value, path, reader_facing=True):
+    def scan(value, path, process=False, analysis=False):
+        """所有会出现在页面上的文字都查推断与渲染措辞；process只查读者正文，analysis查分析类文字。"""
         if not value:
             return
-        for word in CREDIT_MARKETING:
+        for word in CREDIT_INFERENCE:
             if word in value:
                 add('error', path, f'含“{word}”：不得从公开信息推断贷款需求、授信或营销安排')
         for word in INVESTMENT_ADVICE:
@@ -535,13 +547,29 @@ def lint_report(data):
         for word in HYPE:
             if word in value:
                 add('warning', path, f'含“{word}”：避免渲染性或带交易含义的措辞')
-        if reader_facing:
-            for word in PROCESS_NOTES:
+        if analysis:
+            for word in CREDIT_FACT:
                 if word in value:
-                    add('error', path, f'读者正文含编制说明“{word}”：改写reader_summary/reader_analysis，原说明留在summary/analysis')
+                    add('warning', path, f'分析文字含“{word}”：只可引用原文已披露的口径，不得推断授信或放款安排')
+        if process:
+            for pattern in PROCESS_NOTES:
+                found = re.search(pattern, value)
+                if found:
+                    add('error', path, f'读者正文含编制说明“{found.group(0)}”：改写reader_summary/reader_analysis，原说明留在summary/analysis')
+
+    def has_process_note(value):
+        return any(re.search(pattern, value) for pattern in PROCESS_NOTES)
 
     items = data['items']
     kind = data['kind']
+    coverage = data['coverage']
+    scan(data['title'], '$.title', process=True)
+    scan(data.get('issue', ''), '$.issue', process=True)
+    scan(data['config_summary'], '$.config_summary')
+    for i, value in enumerate(coverage.get('highlights', [])):
+        scan(value, f'$.coverage.highlights[{i}]')
+    for i, value in enumerate(coverage['gaps']):
+        scan(value, f'$.coverage.gaps[{i}]')
     summary = data.get('summary')
     if items and not summary:
         add('warning', '$.summary', '有已核实事项但未编制一句话速览')
@@ -553,7 +581,7 @@ def lint_report(data):
             add('warning', '$.summary.text', f'速览{len(value)}字，建议60至140字')
         elif len(value) < 60 or len(value) > 140:
             add('info', '$.summary.text', f'速览{len(value)}字，常规区间为60至140字')
-        scan(value, '$.summary.text')
+        scan(value, '$.summary.text', process=True)
     titles = {}
     themes = set()
     for i, item in enumerate(items):
@@ -566,38 +594,41 @@ def lint_report(data):
         if title in titles:
             add('warning', p + '.title', f'与{titles[title]}标题重复，确认是否同一事件应合并')
         titles.setdefault(title, p)
+        scan(title, p + '.title', process=True)
+        for key in ('theme', 'stage', 'topic', 'region', 'enterprise'):
+            scan(item.get(key, ''), f'{p}.{key}')
         missing = [key for key in ('theme', 'stage', 'publisher_type') if key not in item]
         if missing:
             add('warning', p, '缺少分类字段：' + '、'.join(missing) + '；新编报告应逐条填齐')
         themes.add(item.get('theme', '').strip() or '未分类')
+        # 采集字段同样出现在折叠核验记录中，因此始终检查推断措辞；只有作为读者正文时才检查编制说明。
+        scan(item['summary'], p + '.summary')
         if 'reader_summary' in item:
-            scan(item['reader_summary'], p + '.reader_summary')
-        else:
-            scan(item['summary'], p + '.summary', reader_facing=False)
-            if any(word in item['summary'] for word in PROCESS_NOTES):
-                add('warning', p + '.summary', '采集摘要含技术说明且未编制reader_summary，读者正文会直接显示这些说明')
-            elif len(item['summary']) > 300:
-                add('info', p + '.summary', '采集摘要较长，建议编制80至200字的reader_summary')
+            scan(item['reader_summary'], p + '.reader_summary', process=True)
+        elif has_process_note(item['summary']):
+            add('warning', p + '.summary', '采集摘要含技术说明且未编制reader_summary，读者正文会直接显示这些说明')
+        elif len(item['summary']) > 300:
+            add('info', p + '.summary', '采集摘要较长，建议编制80至200字的reader_summary')
+        scan(item['analysis'], p + '.analysis', analysis=True)
         if 'reader_analysis' in item:
-            scan(item['reader_analysis'], p + '.reader_analysis')
-        else:
-            scan(item['analysis'], p + '.analysis', reader_facing=False)
-        if item['event_date'] and item['event_date'] > item['published_at'][:10]:
+            scan(item['reader_analysis'], p + '.reader_analysis', process=True, analysis=True)
+        if item['event_date'] and item['event_date'] > iso_datetime(item['published_at'], p + '.published_at').date().isoformat():
             add('info', p + '.event_date', '事件日晚于发布日：确认是否为计划里程碑，计划事项应写入正文并标“计划”')
     if len(items) >= 6 and len(themes) > len(items) * 0.7:
         add('warning', '$.items', f'{len(items)}条事项分为{len(themes)}个主题，主题过碎；建议按主题词表归并')
     for i, section in enumerate(data.get('sections', [])):
-        scan(section['body'], f'$.sections[{i}].body')
-        scan(section['heading'], f'$.sections[{i}].heading')
+        scan(section['heading'], f'$.sections[{i}].heading', process=True)
+        scan(section['body'], f'$.sections[{i}].body', process=True, analysis=True)
     for i, figure in enumerate(data.get('key_figures', [])):
-        scan(figure['note'], f'$.key_figures[{i}].note')
+        for key in ('label', 'value', 'note'):
+            scan(figure[key], f'$.key_figures[{i}].{key}', process=True)
     for i, entry in enumerate(data.get('watchlist', [])):
-        scan(entry['text'], f'$.watchlist[{i}].text')
+        scan(entry['text'], f'$.watchlist[{i}].text', process=True, analysis=True)
     if kind in ('weekly', 'monthly', 'special') and items and not data.get('sections'):
         add('warning', '$.sections', '周报、月报和专题简报应有周期信号或专题分析')
     if kind == 'monthly' and len(data.get('sections', [])) > 4:
         add('info', '$.sections', '月报专题通常2至3个，过多会稀释重点')
-    if data['status'] == 'observation' and data['coverage']['gaps'] and not data['coverage'].get('highlights'):
+    if data['status'] == 'observation' and coverage['gaps'] and not coverage.get('highlights'):
         add('info', '$.coverage.highlights', '观察稿建议用highlights浓缩首屏最重要的覆盖限制')
     counts = {level: sum(1 for f in findings if f['level'] == level) for level in ('error', 'warning', 'info')}
     score = max(0, 100 - 15 * counts['error'] - 5 * counts['warning'] - counts['info'])

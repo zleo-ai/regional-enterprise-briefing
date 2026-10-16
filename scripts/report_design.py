@@ -10,7 +10,8 @@ DIGITS = '〇一二三四五六七八九'
 PUBLISHER_LABELS = {'gov': '政府资讯', 'enterprise': '企业资讯', 'other': '其他来源'}
 PUBLISHER_SLOTS = {'政府资讯': 1, '企业资讯': 2, '其他来源': 3}
 SERIES = {'daily': '每日观察', 'weekly': '周度观察', 'monthly': '月度观察', 'special': '专题观察'}
-PARTIAL = {'daily': '部分日报', 'weekly': '部分周报', 'monthly': '部分月报'}
+PARTIAL = {'daily': '部分日报', 'weekly': '部分周报', 'monthly': '部分月报', 'special': '专题观察（进行中）'}
+MAX_SEGMENTS = 4
 CHARTS = {
     'publisher': ('来源构成', '原始披露主体', ''),
     'theme': ('内容主题', '本期关注主题', ''),
@@ -88,7 +89,7 @@ def period_info(data):
     elif kind == 'monthly':
         full_end = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
     else:
-        full_end = end
+        full_end = end + timedelta(days=1) if (end.hour, end.minute, end.second, end.microsecond) != (0, 0, 0, 0) else end
     partial = end < full_end
     last = end - timedelta(microseconds=1)
     if kind == 'daily':
@@ -172,15 +173,14 @@ def folded(counter, muted=None):
     return [(name, value, False) for name, value in rows] + [(name, value, True) for name, value in tail]
 
 
-def publisher_slots(counter):
-    names = [name for name in PUBLISHER_SLOTS if name in counter]
-    names += [name for name, _ in counter.most_common() if name not in PUBLISHER_SLOTS]
-    taken = {PUBLISHER_SLOTS[name] for name in names if name in PUBLISHER_SLOTS}
-    free = [slot for slot in (1, 2, 3) if slot not in taken]
-    slots = {}
-    for name in names:
-        slots[name] = PUBLISHER_SLOTS.get(name) or (free.pop(0) if free else 0)
-    return names, slots
+def publisher_rows(counter):
+    """三种原始披露主体固定三色；旧档的其他分区类别一律中性灰，超过上限时折叠为“其余N类”。"""
+    rows = [(name, counter[name], PUBLISHER_SLOTS[name]) for name in PUBLISHER_SLOTS if name in counter]
+    rows += [(name, value, 0) for name, value in counter.most_common() if name not in PUBLISHER_SLOTS]
+    if len(rows) > MAX_SEGMENTS:
+        rest = rows[MAX_SEGMENTS - 1:]
+        rows = rows[:MAX_SEGMENTS - 1] + [(f'其余{len(rest)}类', sum(value for _, value, _ in rest), 0)]
+    return rows
 
 
 def caption(key):
@@ -192,16 +192,15 @@ def caption(key):
 
 
 def stack_chart(counter):
-    names, slots = publisher_slots(counter)
-    values = [counter[name] for name in names]
-    percents = shares(values)
-    label = '原始披露主体：' + '；'.join(f'{name}{value}条（{pct}%）' for name, value, pct in zip(names, values, percents))
+    rows = publisher_rows(counter)
+    percents = shares([value for _, value, _ in rows])
+    label = '原始披露主体：' + '；'.join(f'{name}{value}条（{pct}%）' for (name, value, _), pct in zip(rows, percents))
     parts = ['<figure class="chart chart-stack" aria-label="' + esc(label) + '">', caption('publisher'), '<div class="stack" aria-hidden="true">']
-    for name, value, pct in zip(names, values, percents):
-        parts.append('<span class="seg s' + str(slots[name]) + '" style="flex-grow:' + str(value) + '" title="' + esc(f'{name}：{value}条（{pct}%）') + '"></span>')
+    for (name, value, slot), pct in zip(rows, percents):
+        parts.append('<span class="seg s' + str(slot) + '" style="flex-grow:' + str(value) + '" title="' + esc(f'{name}：{value}条（{pct}%）') + '"></span>')
     parts.append('</div><ul class="legend">')
-    for name, value, pct in zip(names, values, percents):
-        parts.append('<li><i class="sw s' + str(slots[name]) + '"></i><span>' + esc(name) + '</span><b>' + str(value) + '</b><em>' + str(pct) + '%</em></li>')
+    for (name, value, slot), pct in zip(rows, percents):
+        parts.append('<li><i class="sw s' + str(slot) + '"></i><span>' + esc(name) + '</span><b>' + str(value) + '</b><em>' + str(pct) + '%</em></li>')
     parts.append('</ul></figure>')
     return ''.join(parts)
 
@@ -221,8 +220,8 @@ def bar_chart(key, counter):
 
 def chart_table(key, counter):
     if key == 'publisher':
-        names, _ = publisher_slots(counter)
-        rows = [(name, counter[name]) for name in names]
+        rows = [(name, counter[name]) for name in PUBLISHER_SLOTS if name in counter]
+        rows += [(name, value) for name, value in counter.most_common() if name not in PUBLISHER_SLOTS]
     else:
         main, tail = ranked(counter, MUTED.get(key))
         rows = main + tail

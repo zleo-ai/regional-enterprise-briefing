@@ -87,7 +87,7 @@ python3 scripts/briefing_tool.py options   # 列出报告类型、配色、版�
 | 晨报 `daily` | 昨日发布的新事实；旧事件的新公告以公告发布日入窗并保留旧事件日；方法说明压缩，便于快读 |
 | 周报 `weekly` | 按[周期分析](references/periodic-analysis.md)去重、归并主题，区分主题持续、跨日进展和多源印证，每个信号列具体ID和日期 |
 | 月报 `monthly` | 选2–3个证据充分的专题，按事实、机制、可比口径、反证、条件化判断和后续问题展开；材料不足可少于此数或出观察稿 |
-| 专题 `special` | 企业追踪、项目追踪、政策解读或区域对比，按[专题模板](references/periodic-analysis.md#专题简报模板)组织；周期不超过366天 |
+| 专题 `special` | 企业追踪、项目追踪、政策解读、区域对比或行业扫描，按[专题模板](references/periodic-analysis.md#专题简报模板)组织；周期不超过366天，结束日未到时截至发稿并出观察稿 |
 
 **一句话速览**（`summary`）：读完全部已核实事项后提炼最值得关注的实际变化、主体和状态，通常60–140字，写入 `summary.text` 和 `evidence_ids`。不写“本期N条、政府N条”，不复制标题目录，不截取专题首句。渲染器不生成摘要；旧档缺字段时页面明示“尚未编制”。
 
@@ -114,7 +114,7 @@ python3 scripts/briefing_tool.py render --data 04-final.json --out 简报-要报
 
 配色 `theme`：`classic` 暖纸深红、`navy` 商务蓝、`ink` 素墨、`jade` 青绿；默认随系统深色模式切换，`color_scheme=light` 可固定浅色。也可在最终JSON的 `presentation` 写入 `theme/layout/color_scheme/charts`，命令行参数优先。
 
-图表由渲染器按数据自动选择，`presentation.charts` 可显式指定 `publisher/theme/region/enterprise/stage`：来源构成用分段条，主题、地区、企业用按数量排序的横向条形图，超过7类折叠为“其余N项”，未分类单列在末尾；少于两类或事项少于3条的维度不成图。每张图附数据表。不同项目的阶段不串成漏斗或转化率，本期不按发布日期计数。页面只保留图名、图例、数字，不展示编制或实现说明。
+图表由渲染器按数据自动选择，`presentation.charts` 可显式指定 `publisher/theme/region/enterprise/stage`：来源构成用分段条，主题、地区、企业用按数量排序的横向条形图，超过7类折叠为“其余N项”，未分类单列在末尾；少于两类的维度不成图，主题、地区、企业、阶段图另要求事项不少于3条。每张图附数据表。不同项目的阶段不串成漏斗或转化率，本期不按发布日期计数。页面只保留图名、图例、数字，不展示编制或实现说明。
 
 首屏可见实际编制范围、观察稿、部分周期和重要覆盖限制（`coverage.highlights` 最多3条）；完整缺口和时间戳在折叠区。页面不含脚本、远程字体、跟踪资源、导出按钮或主题切换。
 

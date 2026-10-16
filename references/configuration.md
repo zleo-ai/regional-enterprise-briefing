@@ -25,7 +25,7 @@
 | audience | 是 | 默认 `general`（由助手填）；完整目录见[阅读视角目录](periodic-analysis.md#阅读视角目录)。旧值 `headquarters`、`regional_branch` 仍兼容。视角只调整编辑排序，不代表地域范围，不从角色推断覆盖范围 |
 | regions | 是 | 1–30项；每项 name、level 必填，除 country 外 parent 必填；不接受空数组或“附近”等模糊范围 |
 | regions[].name | 是 | 规范名称，如“赣州市”“浦东新区”；不得凭别名直接确定行政层级 |
-| regions[].parent | 是（country除外） | 上一级规范名称；地级市填所属省，省级填“中国”，县区填所属地级市或直辖市 |
+| regions[].parent | 是（country除外） | 上一级规范名称；地级市填所属省，省级填“中国”，县区填所属地级市或直辖市；省直辖县级单位（如湖北仙桃市、河南济源市、海南东方市）填所属省 |
 | regions[].level | 是 | country / province / city / county。province含下辖全部区域；county涵盖县、县级市、市辖区；country见“全国范围” |
 | region_label | 否 | 经济区或区域组合的展示名，1–40字，如“长三角（沪苏浙皖）”；只用于范围说明和标题，不改变匹配 |
 | enterprises | 否 | 默认[]，不限定企业；最多100项，每项必须name，可选aliases、identifier、region、include_subsidiaries |
