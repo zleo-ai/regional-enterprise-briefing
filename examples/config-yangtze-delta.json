@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "config_name": "长三角招商周报示例",
+  "audience": "investment_promotion",
+  "region_label": "长三角（沪苏浙皖）",
+  "regions": [
+    {
+      "name": "上海市",
+      "parent": "中国",
+      "level": "province"
+    },
+    {
+      "name": "江苏省",
+      "parent": "中国",
+      "level": "province"
+    },
+    {
+      "name": "浙江省",
+      "parent": "中国",
+      "level": "province"
+    },
+    {
+      "name": "安徽省",
+      "parent": "中国",
+      "level": "province"
+    }
+  ],
+  "topics": [
+    "集成电路",
+    "新能源汽车",
+    "生物医药"
+  ],
+  "scope_mode": "all",
+  "source_types": [
+    "gov",
+    "enterprise"
+  ],
+  "max_items": 20,
+  "presentation": {
+    "theme": "navy",
+    "layout": "standard"
+  }
+}

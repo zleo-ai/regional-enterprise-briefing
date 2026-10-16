@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "config_name": "全国储能产业专题示例",
+  "audience": "industry_research",
+  "region_label": "全国",
+  "regions": [
+    {
+      "name": "中国",
+      "level": "country"
+    }
+  ],
+  "topics": [
+    "新型储能"
+  ],
+  "scope_mode": "all",
+  "max_items": 15,
+  "presentation": {
+    "theme": "jade",
+    "layout": "compact"
+  }
+}

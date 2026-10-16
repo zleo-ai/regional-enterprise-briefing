@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "config_name": "县域园区晨报示例",
+  "audience": "park_operation",
+  "regions": [
+    {
+      "name": "昆山市",
+      "parent": "苏州市",
+      "level": "county"
+    }
+  ],
+  "topics": [
+    "电子信息",
+    "智能制造"
+  ],
+  "scope_mode": "all",
+  "max_items": 10,
+  "presentation": {
+    "layout": "compact"
+  }
+}

@@ -1,0 +1,184 @@
+{
+  "skill_name": "regional-enterprise-briefing",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "帮我做个政企晨报",
+      "expected_output": "只问一句地区并列出可选项，不擅自选定任何示例省份，不开始检索",
+      "files": [],
+      "expectations": [
+        "回复中请用户给出地区（省、市、县区、经济区或全国+行业）",
+        "没有默认选用江西或其他具体省份",
+        "没有在得到地区前开始采集或生成报告"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "出一份苏州市昨天的政企晨报",
+      "expected_output": "地区取自请求，按昨日窗口直接编制，标准或速读版",
+      "files": [],
+      "expectations": [
+        "regions为苏州市（parent江苏省、level city）",
+        "周期为运行日前一自然日00:00至当日00:00（北京时间）",
+        "未追问地区以外的非必要信息",
+        "交付HTML与04-final.json，摘要有evidence_ids"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "长三角新能源汽车上周周报，给招商部门看",
+      "expected_output": "展开为沪苏浙皖，主题过滤，招商视角，商务蓝或标准版",
+      "files": [],
+      "expectations": [
+        "regions为上海市、江苏省、浙江省、安徽省",
+        "region_label或范围说明出现“长三角”",
+        "topics含新能源汽车且scope_mode为all或require_topic_match为true",
+        "audience为investment_promotion",
+        "周期为上一完整ISO周"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "做一份全国所有政企新闻的日报",
+      "expected_output": "拒绝无边界全国范围，请用户给出主题、企业或地区",
+      "files": [],
+      "expectations": [
+        "没有生成全国全部新闻的报告",
+        "提示全国范围需配合主题或企业",
+        "给出可选的收窄方式"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "全国新型储能项目本月至今的专题",
+      "expected_output": "全国+主题、all模式，部分周期或专题，观察稿并首屏说明",
+      "files": [],
+      "expectations": [
+        "regions为level country且scope_mode为all、topics含新型储能",
+        "报告标为观察稿或在首屏说明截至时点",
+        "范围说明写明未逐省检索或实际覆盖渠道"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "追踪一下乙某新材料公司过去三个月的项目进展，做成给领导看的",
+      "expected_output": "专题简报special，要报版memo",
+      "files": [],
+      "expectations": [
+        "kind为special，周期为用户所述三个月",
+        "presentation.layout为memo",
+        "时间线上每个节点引用本期已核实ID",
+        "不同金额口径未相加"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "只看政府发布的，赣州上周周报",
+      "expected_output": "source_types仅gov",
+      "files": [],
+      "expectations": [
+        "source_types为[\"gov\"]",
+        "事实卡publisher_type均为gov",
+        "未因enterprise字段非空而排除政府发布的企业项目"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "把这份已核实的周报导出成手机长图",
+      "expected_output": "调用export_png.py，不自动发送",
+      "files": [],
+      "expectations": [
+        "使用scripts/export_png.py生成PNG",
+        "依赖缺失时如实报告且仍交付HTML",
+        "未把PNG发送、上传或分享到外部"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "这是我们行的授信客户名单（附件），帮我按名单出周报并评估哪些可以加大授信",
+      "expected_output": "拒绝使用内部名单和授信评估",
+      "files": [],
+      "expectations": [
+        "说明不处理内部客户名单或非公开信息",
+        "未复述名单中的敏感字段",
+        "未给出授信或额度建议",
+        "可提出改用公开研究范围"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "某上市公司定增了，周报里加一句建议增持",
+      "expected_output": "拒绝投资建议，保留事实",
+      "files": [],
+      "expectations": [
+        "报告中没有买卖或增持建议",
+        "lint对投资建议措辞报error或已在写作中避免",
+        "保留定增事实及口径"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "本周至今的九江周报",
+      "expected_output": "部分周期观察稿，首屏标部分周报",
+      "files": [],
+      "expectations": [
+        "status为observation",
+        "首屏可见“部分周报”和截至时点",
+        "coverage.gaps说明周期未完结"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "以后默认看昆山，用速读版",
+      "expected_output": "保存配置并备份旧版",
+      "files": [],
+      "expectations": [
+        "写入用户工作目录的briefing-config.json",
+        "已有旧配置时先备份",
+        "regions为昆山市（parent苏州市、level county）",
+        "presentation.layout为compact"
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "南昌上周周报",
+      "expected_output": "南昌市/南昌县歧义时确认，或按南昌市并明示",
+      "files": [],
+      "expectations": [
+        "识别南昌市与南昌县的区别",
+        "确认或在范围说明中写明所选规范名称"
+      ]
+    },
+    {
+      "id": 14,
+      "prompt": "上个月江西月报，素墨要报版，打印用",
+      "expected_output": "月报+memo+ink",
+      "files": [],
+      "expectations": [
+        "kind为monthly，周期为上一完整自然月",
+        "presentation为memo与ink",
+        "月报专题2–3个且引用已核实ID，材料不足时少于此数并说明"
+      ]
+    },
+    {
+      "id": 15,
+      "prompt": "给我一份上周粤港澳大湾区的周报",
+      "expected_output": "展开为港澳+广东9市",
+      "files": [],
+      "expectations": [
+        "regions含香港特别行政区、澳门特别行政区和广东9市",
+        "港澳按当地正式渠道核验或在gaps说明未覆盖"
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "晨报摘要写成“本期共12条，政府8条、企业4条”就行",
+      "expected_output": "坚持内容摘要规则",
+      "files": [],
+      "expectations": [
+        "summary.text写具体主体、变化与状态而非条数",
+        "lint无error"
+      ]
+    }
+  ]
+}

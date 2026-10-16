@@ -3,7 +3,7 @@
   "kind": "daily",
   "title": "区域政企简报 · 历史公开材料回放样例",
   "status": "observation",
-  "audience": "headquarters",
+  "audience": "general",
   "config_summary": "江西省全省；企业不限；制造业数智化；事后回溯样例，非2026年最新资讯，非历史时点还原",
   "period": {
     "start": "2024-12-25T00:00:00+08:00",
@@ -13,8 +13,13 @@
   "coverage": {
     "expected_days": 1,
     "available_days": 1,
-    "gaps": ["仅选取一条真实公开原文核验采集到渲染链路；未完成该历史日全渠道检索；不代表完整晨报"],
-    "method": "backfill_public"
+    "gaps": [
+      "仅选取一条真实公开原文核验采集到渲染链路；未完成该历史日全渠道检索；不代表完整晨报"
+    ],
+    "method": "backfill_public",
+    "highlights": [
+      "仅选取一条真实公开原文演示采集到渲染链路，不代表该历史日的完整晨报。"
+    ]
   },
   "items": [
     {
@@ -45,7 +50,9 @@
   ],
   "summary": {
     "text": "历史通知列明数字领航、小灯塔、数智工厂等制造业数字化转型标杆申报方向；该材料仅用于回放通知内容，不能据此判断当前申报安排。",
-    "evidence_ids": ["public-replay-001"]
+    "evidence_ids": [
+      "public-replay-001"
+    ]
   },
   "sections": []
 }

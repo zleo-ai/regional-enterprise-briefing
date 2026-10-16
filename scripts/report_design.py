@@ -1,158 +1,519 @@
-"""自包含资讯阅读页；输入数据由调用方验证。"""
+"""自包含资讯阅读页：四套配色 × 三种版式；输入数据由调用方验证，不推断摘要或新闻事实。"""
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
+
+TZ8 = timezone(timedelta(hours=8))
+WEEKDAYS = '一二三四五六日'
+DIGITS = '〇一二三四五六七八九'
+PUBLISHER_LABELS = {'gov': '政府资讯', 'enterprise': '企业资讯', 'other': '其他来源'}
+PUBLISHER_SLOTS = {'政府资讯': 1, '企业资讯': 2, '其他来源': 3}
+SERIES = {'daily': '每日观察', 'weekly': '周度观察', 'monthly': '月度观察', 'special': '专题观察'}
+PARTIAL = {'daily': '部分日报', 'weekly': '部分周报', 'monthly': '部分月报'}
+CHARTS = {
+    'publisher': ('来源构成', '原始披露主体', ''),
+    'theme': ('内容主题', '本期关注主题', ''),
+    'region': ('地区分布', '事项所在地区', ''),
+    'enterprise': ('企业动态', '涉及企业', ''),
+    'stage': ('事项阶段', '事项所处阶段', '各事项阶段独立统计，不构成同一流程的漏斗。'),
+}
+MUTED = {'theme': '未分类', 'stage': '未标注'}
+MAX_BARS = 7
+CHECK = '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+DISCLAIMER = '本报告基于公开信息整理，仅供参阅交流，不构成投资建议、授信审批意见或对任何主体的信用保证。信息可能存在披露滞后和检索遗漏，重要事项请核对原始来源。'
 
 
 def esc(value):
     return escape(str(value), quote=True)
 
 
-def date(value):
-    return datetime.fromisoformat(value.replace('Z', '+00:00')).astimezone(timezone(timedelta(hours=8)))
+def moment(value):
+    return datetime.fromisoformat(value.replace('Z', '+00:00')).astimezone(TZ8)
 
 
-def links(ids, anchors):
-    return ' '.join('<a href="#' + esc(anchors[value.strip()]) + '" aria-label="查看关联事项' + esc(anchors[value.strip()].split('-')[-1]) + '">[' + esc(anchors[value.strip()].split('-')[-1]) + ']</a>' for value in ids if value.strip() in anchors)
+def cn_date(day):
+    return f'{day.year}年{day.month}月{day.day}日'
+
+
+def month_day(day):
+    return f'{day.month}月{day.day}日'
+
+
+def cn_number(n):
+    if n < 10:
+        return DIGITS[n]
+    tens, ones = divmod(n, 10)
+    if n < 100:
+        return ('' if tens == 1 else DIGITS[tens]) + '十' + (DIGITS[ones] if ones else '')
+    return str(n)
 
 
 def category(item):
     return item['section'].split('·', 1)[0].strip()
 
 
-def charts(items):
-    publisher_labels = {'gov': '政府资讯', 'enterprise': '企业资讯', 'other': '其他来源'}
-    counts = Counter(publisher_labels.get(item['publisher_type'], '其他来源') if 'publisher_type' in item else category(item) for item in items)
-    themes = Counter(item.get('theme', '').strip() or '未分类' for item in items)
-    palette = ('#873b39', '#c68c69', '#6a7c75', '#a09881', '#706b86', '#b98891')
-    parts = ['<section class="dashboard" aria-label="本期样本分布">']
-    parts.append('<figure class="chart"><figcaption><span class="kicker">来源构成</span><h2>本期发布来源<span class="unit">条</span></h2></figcaption><div class="composition">')
-    if len(counts) > 1:
-        offset = 0
-        parts.append('<svg viewBox="0 0 144 144" role="img" aria-label="' + esc('来源分类事项构成：' + '；'.join(f'{k}{v}条' for k, v in counts.items())) + '"><circle cx="72" cy="72" r="52" fill="none" stroke="#ede6dd" stroke-width="18"/>')
-        for n, (name, value) in enumerate(counts.items()):
-            share = value / len(items) * 100
-            parts.append('<circle cx="72" cy="72" r="52" pathLength="100" fill="none" stroke="' + palette[n % len(palette)] + '" stroke-width="18" stroke-dasharray="' + esc(f'{share:.8f} {100-share:.8f}') + '" stroke-dashoffset="' + esc(f'{-offset:.8f}') + '" transform="rotate(-90 72 72)"/>')
-            offset += share
-        parts.append('<text x="72" y="72" text-anchor="middle" class="svg-number">' + str(len(items)) + '</text><text x="72" y="91" text-anchor="middle" class="svg-label">条事项</text></svg>')
+def publisher_of(item):
+    if 'publisher_type' in item:
+        return PUBLISHER_LABELS[item['publisher_type']]
+    return category(item)
+
+
+def links(ids, anchors):
+    parts = []
+    for value in ids:
+        anchor = anchors.get(value.strip())
+        if anchor:
+            number = anchor.split('-')[-1]
+            parts.append('<a href="#' + anchor + '" aria-label="查看关联事项' + number + '">[' + number + ']</a>')
+    return ' '.join(parts)
+
+
+def related(ids, anchors, label='关联事项'):
+    found = links(ids, anchors)
+    return '<div class="related">' + label + ' ' + found + '</div>' if found else ''
+
+
+# ---------------------------------------------------------------------------
+# 周期与报头
+
+def period_info(data):
+    period = data['period']
+    start, end, cutoff = (moment(period[key]) for key in ('start', 'end_exclusive', 'cutoff'))
+    kind = data['kind']
+    if kind == 'daily':
+        full_end = start + timedelta(days=1)
+    elif kind == 'weekly':
+        full_end = start + timedelta(days=7)
+    elif kind == 'monthly':
+        full_end = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
     else:
-        parts.append('<div class="single-number">' + str(len(items)) + '<small>条事项</small></div>')
-    parts.append('<ul class="legend">')
-    for n, (name, value) in enumerate(counts.items()):
-        parts.append('<li><i style="background:' + palette[n % len(palette)] + '"></i><span>' + esc(name) + '</span><b>' + str(value) + '</b></li>')
-    parts.append('</ul></div></figure>')
-    if themes:
-        total = sum(themes.values())
-        ranked = themes.most_common()
-        classified = [(name, value) for name, value in ranked if name != '未分类']
-        missing = [('未分类', themes['未分类'])] if themes.get('未分类') else []
-        limit = 4 if missing else 5
-        if len(classified) > limit:
-            shown = classified[:limit - 1] + [('其他主题', sum(value for _, value in classified[limit - 1:]))] + missing
+        full_end = end
+    partial = end < full_end
+    last = end - timedelta(microseconds=1)
+    if kind == 'daily':
+        span = cn_date(start) + '发布'
+    elif kind == 'weekly':
+        year, week, _ = start.isocalendar()
+        span = f'{year}年第{week}周（{month_day(start)}—{month_day(last)}）'
+    elif kind == 'monthly':
+        span = f'{start.year}年{start.month}月'
+    else:
+        span = cn_date(start) + '—' + (month_day(last) if last.year == start.year else cn_date(last))
+    if partial:
+        span += f'，截至{month_day(cutoff)} {cutoff:%H:%M}'
+    series = PARTIAL[kind] if partial else SERIES[kind]
+    report_day = cn_date(cutoff) + ' 星期' + WEEKDAYS[cutoff.weekday()]
+    return {'series': series, 'span': span, 'report_day': report_day, 'cutoff': cutoff, 'partial': partial}
+
+
+def masthead(data, info):
+    title = data['title'].split('｜', 1)
+    status = '正式简报' if data['status'] == 'formal' else '观察稿'
+    parts = ['<header class="mast"><p class="series"><span>公开资讯 · ' + esc(info['series']) + '</span>']
+    if data.get('issue'):
+        parts.append('<span class="issue">' + esc(data['issue']) + '</span>')
+    parts.append('</p><h1>' + esc(title[0].strip()) + '</h1>')
+    if len(title) > 1 and not any(char.isdigit() for char in title[1]):
+        parts.append('<p class="subtitle">' + esc(title[1].strip()) + '</p>')
+    parts.append('<div class="dateline"><span>' + esc(info['report_day']) + '</span><span>覆盖 ' + esc(info['span']) + '</span>'
+                 '<span class="status ' + esc(data['status']) + '">' + status + '</span>'
+                 '<span>截止 ' + esc(info['cutoff'].strftime('%m-%d %H:%M')) + ' · 北京时间</span></div></header>')
+    return ''.join(parts)
+
+
+def scope_and_notices(data):
+    coverage = data['coverage']
+    parts = ['<section class="scope" aria-label="实际编制范围"><p><b>编制范围</b><span>' + esc(data['config_summary']) + '</span></p></section>']
+    notes = coverage.get('highlights') or coverage['gaps'][:2]
+    if notes:
+        parts.append('<section class="coverage-gaps notice" aria-label="本期阅读提示"><b>阅读提示</b><ul>'
+                     + ''.join('<li>' + esc(note) + '</li>' for note in notes) + '</ul></section>')
+    return ''.join(parts)
+
+
+# ---------------------------------------------------------------------------
+# 图表：只表达本期合格样本；HTML/CSS绘制，无脚本，每张图附数据表
+
+def tallies(items):
+    result = {key: Counter() for key in CHARTS}
+    for item in items:
+        result['publisher'][publisher_of(item)] += 1
+        result['theme'][item.get('theme', '').strip() or '未分类'] += 1
+        result['region'][item['region'].strip()] += 1
+        if item['enterprise'].strip():
+            result['enterprise'][item['enterprise'].strip()] += 1
+        result['stage'][item.get('stage', '').strip() or '未标注'] += 1
+    return result
+
+
+def shares(values):
+    total = sum(values)
+    raw = [value * 100 / total for value in values]
+    floors = [int(value) for value in raw]
+    order = sorted(range(len(values)), key=lambda i: (floors[i] - raw[i], i))
+    for i in order[:100 - sum(floors)]:
+        floors[i] += 1
+    return floors
+
+
+def ranked(counter, muted=None):
+    rows = [(name, value) for name, value in counter.most_common() if name != muted]
+    tail = [(muted, counter[muted])] if muted and counter.get(muted) else []
+    return rows, tail
+
+
+def folded(counter, muted=None):
+    rows, tail = ranked(counter, muted)
+    limit = MAX_BARS - len(tail)
+    if len(rows) > limit:
+        rest = rows[limit - 1:]
+        rows = rows[:limit - 1] + [(f'其余{len(rest)}项', sum(value for _, value in rest))]
+    return [(name, value, False) for name, value in rows] + [(name, value, True) for name, value in tail]
+
+
+def publisher_slots(counter):
+    names = [name for name in PUBLISHER_SLOTS if name in counter]
+    names += [name for name, _ in counter.most_common() if name not in PUBLISHER_SLOTS]
+    taken = {PUBLISHER_SLOTS[name] for name in names if name in PUBLISHER_SLOTS}
+    free = [slot for slot in (1, 2, 3) if slot not in taken]
+    slots = {}
+    for name in names:
+        slots[name] = PUBLISHER_SLOTS.get(name) or (free.pop(0) if free else 0)
+    return names, slots
+
+
+def caption(key):
+    kicker, title, caveat = CHARTS[key]
+    html = '<figcaption><span class="kicker">' + kicker + '</span><h3>' + title + '<span class="unit">条</span></h3></figcaption>'
+    if caveat:
+        html += '<p class="chart-caveat">' + caveat + '</p>'
+    return html
+
+
+def stack_chart(counter):
+    names, slots = publisher_slots(counter)
+    values = [counter[name] for name in names]
+    percents = shares(values)
+    label = '原始披露主体：' + '；'.join(f'{name}{value}条（{pct}%）' for name, value, pct in zip(names, values, percents))
+    parts = ['<figure class="chart chart-stack" aria-label="' + esc(label) + '">', caption('publisher'), '<div class="stack" aria-hidden="true">']
+    for name, value, pct in zip(names, values, percents):
+        parts.append('<span class="seg s' + str(slots[name]) + '" style="flex-grow:' + str(value) + '" title="' + esc(f'{name}：{value}条（{pct}%）') + '"></span>')
+    parts.append('</div><ul class="legend">')
+    for name, value, pct in zip(names, values, percents):
+        parts.append('<li><i class="sw s' + str(slots[name]) + '"></i><span>' + esc(name) + '</span><b>' + str(value) + '</b><em>' + str(pct) + '%</em></li>')
+    parts.append('</ul></figure>')
+    return ''.join(parts)
+
+
+def bar_chart(key, counter):
+    rows = folded(counter, MUTED.get(key))
+    top = max(value for _, value, _ in rows)
+    label = CHARTS[key][1] + '：' + '；'.join(f'{name}{value}条' for name, value, _ in rows)
+    parts = ['<figure class="chart chart-bars" aria-label="' + esc(label) + '">', caption(key), '<ol class="bars">']
+    for name, value, muted in rows:
+        width = f'{value / top * 100:.2f}'
+        parts.append('<li' + (' class="muted"' if muted else '') + ' title="' + esc(f'{name}：{value}条') + '"><span class="bar-label">' + esc(name)
+                     + '</span><span class="bar-track"><span class="bar-fill" style="width:' + width + '%"></span></span><b class="bar-value">' + str(value) + '</b></li>')
+    parts.append('</ol></figure>')
+    return ''.join(parts)
+
+
+def chart_table(key, counter):
+    if key == 'publisher':
+        names, _ = publisher_slots(counter)
+        rows = [(name, counter[name]) for name in names]
+    else:
+        main, tail = ranked(counter, MUTED.get(key))
+        rows = main + tail
+    percents = shares([value for _, value in rows])
+    body = ''.join('<tr><th scope="row">' + esc(name) + '</th><td>' + str(value) + '</td><td>' + str(pct) + '%</td></tr>'
+                   for (name, value), pct in zip(rows, percents))
+    return ('<table><caption>' + CHARTS[key][1] + '</caption><thead><tr><th scope="col">类别</th><th scope="col">事项</th>'
+            '<th scope="col">占比</th></tr></thead><tbody>' + body + '</tbody></table>')
+
+
+def chosen_charts(data, presentation, counts):
+    requested = presentation.get('charts')
+    if requested is None:
+        layout = presentation['layout']
+        if layout == 'memo':
+            requested = []
+        elif layout == 'compact':
+            requested = ['publisher']
+        elif data['kind'] == 'daily':
+            requested = ['publisher', 'theme']
         else:
-            shown = classified + missing
-        description = '主题事项数：' + '；'.join(name + str(value) + '条' for name, value in shown)
-        parts.append('<figure class="chart"><figcaption><span class="kicker">内容主题</span><h2>本期关注主题<span class="unit">条</span></h2></figcaption><svg class="theme-map" viewBox="0 0 400 160" preserveAspectRatio="none" role="img" aria-label="' + esc(description) + '">')
-        remaining, x, y, width, height = total, 0.0, 0.0, 400.0, 160.0
-        for n, (name, value) in enumerate(shown):
-            fraction = value / remaining
-            if width >= height:
-                tile_width, tile_height = width * fraction, height
-            else:
-                tile_width, tile_height = width, height * fraction
-            parts.append('<rect x="' + esc(f'{x:.8f}') + '" y="' + esc(f'{y:.8f}') + '" width="' + esc(f'{tile_width:.8f}') + '" height="' + esc(f'{tile_height:.8f}') + '" fill="' + palette[n % len(palette)] + '"><title>' + esc(name) + '：' + str(value) + '条</title></rect>')
-            if width >= height:
-                x += tile_width
-                width -= tile_width
-            else:
-                y += tile_height
-                height -= tile_height
-            remaining -= value
-        parts.append('</svg><ul class="legend theme-legend">')
-        for n, (name, value) in enumerate(shown):
-            parts.append('<li><i style="background:' + palette[n % len(palette)] + '"></i><span>' + esc(name) + '</span><b>' + str(value) + '</b></li>')
-        parts.append('</ul>')
-        if len(ranked) > 5:
-            parts.append('<details class="theme-list"><summary>完整主题清单（' + str(len(ranked)) + '类）</summary><ul>' + ''.join('<li>' + esc(name) + '：' + str(value) + '条</li>' for name, value in ranked) + '</ul></details>')
-        parts.append('</figure>')
+            requested = ['publisher', 'theme', 'region', 'enterprise']
+    total = len(data['items'])
+    return [key for key in requested if len(counts[key]) >= 2 and (key == 'publisher' or total >= 3)]
+
+
+def stats(data, counts):
+    items, coverage = data['items'], data['coverage']
+    primary = sum(1 for item in items if item['verification'] == 'primary_verified')
+    themes = counts['theme']
+    classified = len([name for name in themes if name != '未分类'])
+    tiles = [
+        ('已核实事项', str(len(items)), '条', ''),
+        ('一手来源核实', str(primary), '条', f'其余{len(items) - primary}条为独立来源互证' if primary < len(items) else ''),
+        ('内容主题', str(classified), '类', f'含未分类{themes["未分类"]}条' if themes.get('未分类') else ''),
+        ('日期覆盖', f'{coverage["available_days"]}/{coverage["expected_days"]}', '天', ''),
+    ]
+    return '<dl class="stats">' + ''.join(
+        '<div><dt>' + label + '</dt><dd>' + value + '<small>' + unit + '</small></dd>' + ('<dd class="stat-note">' + esc(note) + '</dd>' if note else '') + '</div>'
+        for label, value, unit, note in tiles) + '</dl>'
+
+
+def dashboard(data, presentation, counts):
+    keys = chosen_charts(data, presentation, counts)
+    parts = ['<section class="dashboard" aria-label="本期概况">', stats(data, counts)]
+    if keys:
+        parts.append('<div class="charts n' + str(len(keys)) + '">')
+        for key in keys:
+            parts.append(stack_chart(counts[key]) if key == 'publisher' else bar_chart(key, counts[key]))
+        parts.append('</div><details class="chart-data"><summary>图表数据表</summary><div class="table-wrap">'
+                     + ''.join(chart_table(key, counts[key]) for key in keys) + '</div></details>')
     parts.append('</section>')
     return ''.join(parts)
 
 
-def render_report(data):
-    css = (Path(__file__).resolve().parent.parent / 'assets' / 'report.css').read_text(encoding='utf-8')
-    items, period, coverage = data['items'], data['period'], data['coverage']
-    anchors = {item['id'].strip(): 'item-' + str(i + 1) for i, item in enumerate(items)}
-    cutoff, start = date(period['cutoff']), date(period['start'])
-    last = date(period['end_exclusive']) - timedelta(seconds=1)
-    title = data['title'].split('｜', 1)
-    dateline = cutoff.strftime('%Y年%m月%d日') if data['kind'] == 'daily' else start.strftime('%Y年%m月%d日') + '—' + last.strftime('%m月%d日')
-    label = {'daily': '每日观察', 'weekly': '周度观察', 'monthly': '月度观察'}.get(data['kind'], '资讯观察')
-    end = date(period['end_exclusive'])
-    midnight = start.hour == start.minute == start.second == 0
-    if data['kind'] == 'weekly' and (start.weekday() != 0 or not midnight or end - start != timedelta(days=7) or cutoff < end):
-        label = '部分周报'
-    if data['kind'] == 'monthly':
-        next_month = start.replace(year=start.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0) if start.month == 12 else start.replace(month=start.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0)
-        if start.day != 1 or not midnight or end != next_month or cutoff < end:
-            label = '部分月报'
-    parts = ['<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">', '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; base-uri \'none\'; form-action \'none\'">', '<title>' + esc(data['title']) + '</title><style>' + css + '</style></head><body><main class="page"><header class="mast"><p class="series">公开资讯 · ' + esc(label) + '</p><h1>' + esc(title[0].strip()) + '</h1>']
-    if len(title) > 1 and not any(char.isdigit() for char in title[1]):
-        parts.append('<p class="subtitle">' + esc(title[1].strip()) + '</p>')
-    parts.append('<div class="dateline"><span>' + esc(dateline) + '</span><span class="status">' + ('正式简报' if data['status'] == 'formal' else '观察稿') + '</span><span>截止 ' + esc(cutoff.strftime('%m-%d %H:%M')) + ' · 北京时间</span></div></header>')
-    parts.append('<section class="scope" aria-label="实际编制范围"><p>' + esc(data['config_summary']) + '</p></section>')
-    coverage_highlights = coverage.get('highlights') or coverage['gaps'][:2]
-    if coverage_highlights:
-        parts.append('<section class="coverage-gaps" aria-label="本期阅读提示"><p>' + esc(' '.join(coverage_highlights)) + '</p></section>')
-    if items:
-        parts.append(charts(items))
-        summary = data.get('summary') or {}
-        parts.append('<section class="glance" id="glance"><h2>一句话速览</h2><p>' + esc(summary.get('text') or '内容摘要尚未编制，请查看已核实事项。') + '</p>')
-        if summary.get('evidence_ids'):
-            parts.append('<div class="related">关联事项 ' + links(summary['evidence_ids'], anchors) + '</div>')
-        parts.append('</section>')
-    else:
-        parts.append('<section class="empty"><h2>本期暂无已核实事项</h2><p>现有材料不足以形成内容摘要或分布图，不能据此判断没有事件。</p></section>')
+# ---------------------------------------------------------------------------
+# 内容区块
+
+def glance(data, anchors, heading):
+    summary = data.get('summary') or {}
+    parts = ['<section class="glance" id="glance"><h2>' + heading + '</h2><p>'
+             + esc(summary.get('text') or '内容摘要尚未编制，请查看已核实事项。') + '</p>']
+    if summary.get('evidence_ids'):
+        parts.append(related(summary['evidence_ids'], anchors))
+    parts.append('</section>')
+    return ''.join(parts)
+
+
+def key_figures(data, anchors):
+    figures = data.get('key_figures') or []
+    if not figures:
+        return ''
+    parts = ['<section class="figures" aria-label="关键数字"><h2 class="block-title">关键数字</h2><div class="figure-grid">']
+    for figure in figures:
+        parts.append('<div class="figure"><span class="figure-label">' + esc(figure['label']) + '</span><strong class="figure-value">'
+                     + esc(figure['value']) + '</strong><p class="figure-note">' + esc(figure['note']) + '</p>'
+                     + related(figure['evidence_ids'], anchors, '依据') + '</div>')
+    parts.append('</div></section>')
+    return ''.join(parts)
+
+
+def watchlist(data, anchors, heading):
+    entries = data.get('watchlist') or []
+    if not entries:
+        return ''
+    parts = ['<section class="watchlist">' + heading + '<ol class="watch-list">']
+    for entry in entries:
+        parts.append('<li><p>' + esc(entry['text']) + '</p>' + related(entry.get('evidence_ids', []), anchors) + '</li>')
+    parts.append('</ol></section>')
+    return ''.join(parts)
+
+
+def grouped(items):
     groups = {}
     for item in items:
-        group = category(item)
-        subgroup = item['section'].split('·', 1)[1].strip() if '·' in item['section'] else '已核实事项'
-        groups.setdefault(group, {}).setdefault(subgroup, []).append(item)
-    for group, subgroups in groups.items():
-        parts.append('<section class="source-section"><div class="section-heading"><span class="kicker">公开事项</span><h2>' + esc(group) + '</h2></div>')
-        for subgroup, entries in subgroups.items():
-            parts.append('<section class="subgroup"><h3 class="subgroup-title">' + esc(subgroup) + '</h3><div class="item-grid">')
-            for item in entries:
-                verified = '一手来源已核实' if item['verification'] == 'primary_verified' else '独立来源已核实'
-                parts.append('<article class="item" id="' + anchors[item['id'].strip()] + '"><div class="eyebrow"><span>' + esc(item['region']) + '</span><span>发布 ' + esc(date(item['published_at']).strftime('%Y-%m-%d')) + '</span></div><h4>' + esc(item['title']) + '</h4><h5 class="facts-label">公开事实</h5><p class="fact">' + esc(item.get('reader_summary') or item['summary']) + '</p>')
-                reader_analysis = item.get('reader_analysis', item['analysis'])
-                if reader_analysis:
-                    parts.append('<div class="analysis"><h5>研究关注</h5><p>' + esc(reader_analysis) + '</p></div>')
-                tags = [('企业', item['enterprise']), ('议题', item['topic']), ('主题', item.get('theme', '')), ('阶段', item.get('stage', ''))]
-                parts.append('<dl class="metadata">' + ''.join('<div><dt>' + label + '</dt><dd>' + esc(value) + '</dd></div>' for label, value in tags if value) + '<div><dt>事件日期</dt><dd>' + esc(item['event_date'] or '未披露') + '</dd></div></dl><div class="sources"><span class="verified">' + verified + '</span>')
-                for source in item['sources']:
-                    parts.append('<p><a href="' + esc(source['url']) + '" rel="noopener noreferrer">' + esc(source['name']) + '</a><span>发布 ' + esc(date(source['published_at']).strftime('%Y-%m-%d')) + '</span></p>')
-                parts.append('</div></article>')
+        groups.setdefault(category(item), {}).setdefault(subgroup_of(item), []).append(item)
+    return groups
+
+
+def badges(item):
+    parts = []
+    if item.get('priority') == 'high':
+        parts.append('<span class="badge priority">重点</span>')
+    if 'publisher_type' in item:
+        name = PUBLISHER_LABELS[item['publisher_type']]
+        parts.append('<span class="badge"><i class="dot s' + str(PUBLISHER_SLOTS[name]) + '"></i>' + name + '</span>')
+    return ''.join(parts)
+
+
+def verified_label(item):
+    return '一手来源已核实' if item['verification'] == 'primary_verified' else '独立来源已核实'
+
+
+def reader_text(item):
+    return item.get('reader_summary') or item['summary']
+
+
+def reader_analysis(item):
+    return item.get('reader_analysis', item['analysis'])
+
+
+def subgroup_of(item):
+    return item['section'].split('·', 1)[1].strip() if '·' in item['section'] else '已核实事项'
+
+
+def card_item(item, anchor):
+    number = anchor.split('-')[-1]
+    parts = ['<article class="item" id="' + anchor + '"><div class="item-head"><span class="item-no">' + number.zfill(2) + '</span>'
+             + ('<span class="item-dept">' + esc(subgroup_of(item)) + '</span>' if '·' in item['section'] else '') + badges(item) + '<span class="item-region">' + esc(item['region'])
+             + '</span><span class="item-date">发布 '
+             + esc(moment(item['published_at']).strftime('%Y-%m-%d')) + '</span></div><h4>' + esc(item['title'])
+             + '</h4><h5 class="facts-label">公开事实</h5><p class="fact">' + esc(reader_text(item)) + '</p>']
+    chips = [('阶段', item.get('stage', '')), ('主题', item.get('theme', ''))]
+    if any(value for _, value in chips):
+        parts.append('<ul class="chips">' + ''.join('<li class="chip"><b>' + label + '</b>' + esc(value) + '</li>' for label, value in chips if value) + '</ul>')
+    analysis = reader_analysis(item)
+    if analysis:
+        parts.append('<div class="analysis"><h5>研究关注</h5><p>' + esc(analysis) + '</p></div>')
+    topic = item['topic'] if item['topic'].strip() != item.get('theme', '').strip() else ''
+    meta = [('企业', item['enterprise']), ('议题', topic), ('事件日期', item['event_date'] or '未披露')]
+    parts.append('<dl class="metadata">' + ''.join('<div><dt>' + label + '</dt><dd>' + esc(value) + '</dd></div>' for label, value in meta if value)
+                 + '</dl><div class="sources"><span class="verified">' + CHECK + verified_label(item) + '</span>')
+    for source in item['sources']:
+        parts.append('<p><a href="' + esc(source['url']) + '" rel="noopener noreferrer">' + esc(source['name']) + '</a><span>发布 '
+                     + esc(moment(source['published_at']).strftime('%Y-%m-%d')) + '</span></p>')
+    parts.append('</div></article>')
+    return ''.join(parts)
+
+
+def compact_item(item, anchor):
+    number = anchor.split('-')[-1]
+    meta = [esc(item['region']), '发布 ' + esc(moment(item['published_at']).strftime('%m-%d'))]
+    if item.get('stage'):
+        meta.append('阶段 ' + esc(item['stage']))
+    if item['enterprise']:
+        meta.append(esc(item['enterprise']))
+    parts = ['<article class="item compact-item" id="' + anchor + '"><span class="item-no">' + number + '</span><div class="item-main"><h4>'
+             + esc(item['title']) + '</h4><p class="item-meta">' + badges(item) + ''.join('<span>' + value + '</span>' for value in meta)
+             + '</p><p class="fact">' + esc(reader_text(item)) + '</p>']
+    analysis = reader_analysis(item)
+    if analysis:
+        parts.append('<p class="compact-analysis"><b>研究关注</b>' + esc(analysis) + '</p>')
+    parts.append('<p class="compact-source"><span class="verified">' + CHECK + verified_label(item) + '</span>'
+                 + '；'.join('<a href="' + esc(source['url']) + '" rel="noopener noreferrer">' + esc(source['name']) + '</a>' for source in item['sources'])
+                 + '</p></div></article>')
+    return ''.join(parts)
+
+
+def memo_item(item, anchor):
+    number = anchor.split('-')[-1]
+    parts = ['<article class="item memo-item" id="' + anchor + '"><h4><span class="item-no">' + number + '.</span>' + badges(item)
+             + esc(item['title']) + '</h4><p class="fact">' + esc(reader_text(item)) + '</p>']
+    analysis = reader_analysis(item)
+    if analysis:
+        parts.append('<p class="memo-analysis"><b>研究关注：</b>' + esc(analysis) + '</p>')
+    meta = [('地区', item['region']), ('阶段', item.get('stage', '')), ('主题', item.get('theme', '')), ('企业', item['enterprise']),
+            ('事件日期', item['event_date'] or '未披露')]
+    parts.append('<p class="memo-meta">' + '　'.join(label + '：' + esc(value) for label, value in meta if value) + '</p>')
+    sources = '；'.join('<a href="' + esc(source['url']) + '" rel="noopener noreferrer">' + esc(source['name']) + '</a>（'
+                       + esc(moment(source['published_at']).strftime('%Y-%m-%d')) + '发布）' for source in item['sources'])
+    parts.append('<p class="memo-source">来源：' + sources + '　' + verified_label(item) + '</p></article>')
+    return ''.join(parts)
+
+
+def item_sections(items, anchors, layout, chapter_start):
+    parts = []
+    for n, (group, subgroups) in enumerate(grouped(items).items()):
+        count = sum(len(entries) for entries in subgroups.values())
+        if layout == 'memo':
+            parts.append('<section class="source-section"><h2 class="chapter">' + cn_number(chapter_start + n) + '、' + esc(group) + '</h2>')
+        else:
+            parts.append('<section class="source-section"><div class="section-heading"><h2>' + esc(group) + '</h2><span class="count">'
+                         + str(count) + '条</span></div>')
+        if layout == 'standard':
+            # 卡片版把二级分类写在卡片抬头，按分区统一排成双栏，避免单条子类撑满整行。
+            parts.append('<div class="item-grid">')
+            parts.extend(card_item(item, anchors[item['id'].strip()]) for entries in subgroups.values() for item in entries)
             parts.append('</div></section>')
+            continue
+        render = compact_item if layout == 'compact' else memo_item
+        for m, (subgroup, entries) in enumerate(subgroups.items()):
+            title = ('（' + cn_number(m + 1) + '）' if layout == 'memo' else '') + esc(subgroup)
+            parts.append('<section class="subgroup"><h3 class="subgroup-title">' + title + '</h3>')
+            parts.extend(render(item, anchors[item['id'].strip()]) for item in entries)
+            parts.append('</section>')
         parts.append('</section>')
-    if data.get('sections'):
-        parts.append('<section class="features"><div class="section-heading"><span class="kicker">' + esc(label) + '</span><h2>专题分析</h2></div><div class="feature-grid">')
-        for section in data['sections']:
-            parts.append('<article class="feature"><h3>' + esc(section['heading']) + '</h3><p>' + esc(section['body']) + '</p>')
-            if section.get('evidence_ids'):
-                parts.append('<div class="related">关联证据 ' + links(section['evidence_ids'], anchors) + '</div>')
-            parts.append('</article>')
-        parts.append('</div></section>')
-    parts.append('<section class="appendix"><details><summary>完整来源与核验记录</summary><div class="details-body">')
-    for item in items:
-        parts.append('<section class="evidence-record"><h3><a href="#' + anchors[item['id'].strip()] + '">' + esc(item['title']) + '</a></h3><p>事项ID：' + esc(item['id']) + '<br>核验标记：' + esc(item['verification']) + '<br>事项发布：' + esc(item['published_at']) + '<br>事件日期：' + esc(item['event_date'] or '未披露') + '</p>')
+    return ''.join(parts)
+
+
+def features(data, anchors, info, layout, chapter):
+    sections = data.get('sections') or []
+    if not sections:
+        return ''
+    if layout == 'memo':
+        parts = ['<section class="features"><h2 class="chapter">' + cn_number(chapter) + '、专题分析</h2>']
+        for n, section in enumerate(sections):
+            parts.append('<article class="feature"><h3>（' + cn_number(n + 1) + '）' + esc(section['heading']) + '</h3><p>' + esc(section['body']) + '</p>'
+                         + related(section.get('evidence_ids', []), anchors, '关联证据') + '</article>')
+        parts.append('</section>')
+        return ''.join(parts)
+    parts = ['<section class="features"><div class="section-heading"><h2>专题分析</h2><span class="count">' + esc(info['series'])
+             + '</span></div><div class="feature-grid">']
+    for section in sections:
+        parts.append('<article class="feature"><h3>' + esc(section['heading']) + '</h3><p>' + esc(section['body']) + '</p>'
+                     + related(section.get('evidence_ids', []), anchors, '关联证据') + '</article>')
+    parts.append('</div></section>')
+    return ''.join(parts)
+
+
+def appendix(data, ordered, anchors, audience_label):
+    period, coverage = data['period'], data['coverage']
+    parts = ['<section class="appendix"><details><summary>完整来源与核验记录</summary><div class="details-body">']
+    for item in ordered:
+        parts.append('<section class="evidence-record"><h3><a href="#' + anchors[item['id'].strip()] + '">' + esc(item['title']) + '</a></h3><p>事项ID：' + esc(item['id'])
+                     + '<br>核验标记：' + esc(item['verification']) + '<br>事项发布：' + esc(item['published_at']) + '<br>事件日期：' + esc(item['event_date'] or '未披露') + '</p>')
         parts.append('<p>完整采集摘要：' + esc(item['summary']) + '</p><p>分析与核验说明：' + esc(item['analysis']) + '</p><ol>')
         for source in item['sources']:
-            parts.append('<li><a href="' + esc(source['url']) + '" rel="noopener noreferrer">' + esc(source['name']) + '</a><p>原文：' + esc(source['url']) + '<br>发布：' + esc(source['published_at']) + '<br>检索：' + esc(source['retrieved_at']) + '</p></li>')
+            parts.append('<li><a href="' + esc(source['url']) + '" rel="noopener noreferrer">' + esc(source['name']) + '</a><p>原文：' + esc(source['url'])
+                         + '<br>发布：' + esc(source['published_at']) + '<br>检索：' + esc(source['retrieved_at']) + '</p></li>')
         parts.append('</ol></section>')
-    parts.append('</div></details><details id="run-notes"><summary>编制范围、覆盖缺口与运行记录</summary><div class="details-body"><p>完整标题：' + esc(data['title']) + '<br>编制范围：' + esc(data['config_summary']) + '<br>受众配置：' + esc(data['audience']) + '<br>时区：Asia/Shanghai</p><p>周期起点：' + esc(period['start']) + '<br>周期终点（不含）：' + esc(period['end_exclusive']) + '<br>信息截止：' + esc(period['cutoff']) + '<br>日期覆盖：' + esc(coverage['available_days']) + '/' + esc(coverage['expected_days']) + ' 天<br>资料策略：' + esc('仅汇总已有记录' if coverage['method'] == 'aggregate_only' else '补采公开历史资料') + '</p>')
+    parts.append('</div></details><details id="run-notes"><summary>编制范围、覆盖缺口与运行记录</summary><div class="details-body"><p>完整标题：' + esc(data['title'])
+                 + '<br>编制范围：' + esc(data['config_summary']) + '<br>阅读视角：' + esc(audience_label) + '（' + esc(data['audience']) + '）<br>时区：Asia/Shanghai</p><p>周期起点：'
+                 + esc(period['start']) + '<br>周期终点（不含）：' + esc(period['end_exclusive']) + '<br>信息截止：' + esc(period['cutoff']) + '<br>日期覆盖：'
+                 + esc(coverage['available_days']) + '/' + esc(coverage['expected_days']) + ' 天<br>资料策略：'
+                 + esc('仅汇总已有记录' if coverage['method'] == 'aggregate_only' else '补采公开历史资料') + '</p>')
     if coverage['gaps']:
         parts.append('<h3>覆盖缺口</h3><ul>' + ''.join('<li>' + esc(gap) + '</li>' for gap in coverage['gaps']) + '</ul>')
-    parts.append('</div></details></section><footer><p>公开信息整理 · 请以原始披露为准</p><p>本报告基于公开信息整理，仅供参阅交流，不构成投资建议、授信审批意见或对任何主体的信用保证。信息可能存在披露滞后和检索遗漏，重要事项请核对原始来源。</p></footer></main></body></html>')
+    parts.append('</div></details></section>')
+    return ''.join(parts)
+
+
+def render_report(data, presentation=None, audience_label=''):
+    presentation = presentation or {'theme': 'classic', 'layout': 'standard', 'color_scheme': 'auto'}
+    layout = presentation['layout']
+    css = (Path(__file__).resolve().parent.parent / 'assets' / 'report.css').read_text(encoding='utf-8')
+    items = data['items']
+    ordered = [item for subgroups in grouped(items).values() for entries in subgroups.values() for item in entries]
+    anchors = {item['id'].strip(): 'item-' + str(i + 1) for i, item in enumerate(ordered)}
+    info = period_info(data)
+    counts = tallies(items)
+    scheme = presentation['color_scheme']
+    body_class = 'theme-' + presentation['theme'] + ' layout-' + layout + (' scheme-light' if scheme == 'light' else '')
+    parts = ['<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">',
+             '<meta name="color-scheme" content="' + ('light' if scheme == 'light' else 'light dark') + '">',
+             '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; base-uri \'none\'; form-action \'none\'">',
+             '<title>' + esc(data['title']) + '</title><style>' + css + '</style></head><body class="' + body_class + '"><main class="page">',
+             masthead(data, info), scope_and_notices(data)]
+    if not items:
+        parts.append('<section class="empty"><h2>本期暂无已核实事项</h2><p>现有材料不足以形成内容摘要或分布图，不能据此判断没有事件。</p></section>')
+    elif layout == 'memo':
+        parts.append(glance(data, anchors, '内容提要'))
+        parts.append(key_figures(data, anchors))
+        if presentation.get('charts'):
+            parts.append(dashboard(data, presentation, counts))
+        else:
+            primary = sum(1 for item in items if item['verification'] == 'primary_verified')
+            parts.append('<p class="meta-line">本期收录已核实事项' + str(len(items)) + '条，其中一手来源核实' + str(primary) + '条；日期覆盖'
+                         + str(data['coverage']['available_days']) + '/' + str(data['coverage']['expected_days']) + '天。</p>')
+    else:
+        parts.append(dashboard(data, presentation, counts))
+        parts.append(glance(data, anchors, '一句话速览'))
+        parts.append(key_figures(data, anchors))
+    chapter = 1
+    if items:
+        parts.append(item_sections(items, anchors, layout, chapter))
+        chapter += len(grouped(items))
+    parts.append(features(data, anchors, info, layout, chapter))
+    if data.get('sections'):
+        chapter += 1
+    heading = ('<h2 class="chapter">' + cn_number(chapter) + '、后续关注</h2>') if layout == 'memo' else '<div class="section-heading"><h2>后续关注</h2></div>'
+    parts.append(watchlist(data, anchors, heading))
+    parts.append(appendix(data, ordered, anchors, audience_label))
+    parts.append('<footer><p>公开信息整理 · 请以原始披露为准</p><p>' + DISCLAIMER + '</p></footer></main></body></html>')
     return ''.join(parts)

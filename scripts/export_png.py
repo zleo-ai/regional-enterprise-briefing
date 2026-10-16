@@ -7,20 +7,26 @@ import struct
 import sys
 
 sys.dont_write_bytecode = True
-from briefing_tool import ValidationError, load_json, render_report
+from briefing_tool import LAYOUTS, THEMES, ValidationError, load_json, render_report
 
 MAX_RENDER_PIXELS = 90_000_000
 MAX_RENDER_HEIGHT = 60_000
 
 
-def export_png(data_path, out_path, width=540, scale=2, browser_channel='auto'):
-    """不请求网络，不运行页面脚本，不覆盖已有文件，不截断内容。"""
+def export_png(data_path, out_path, width=540, scale=2, browser_channel='auto', theme=None, layout=None, executable_path=None):
+    """不请求网络，不运行页面脚本，不覆盖已有文件，不截断内容；长图始终使用浅色配色。"""
     if type(width) is not int or not 360 <= width <= 720:
         raise ValidationError('$.width: 必须是360至720的整数')
     if type(scale) is not int or scale not in (1, 2, 3):
         raise ValidationError('$.scale: 必须是1、2或3')
     if browser_channel not in ('auto', 'chromium', 'chrome', 'msedge'):
         raise ValidationError('$.browser_channel: 不支持的浏览器')
+    if theme is not None and theme not in THEMES:
+        raise ValidationError('$.theme: 不支持的配色')
+    if layout is not None and layout not in LAYOUTS:
+        raise ValidationError('$.layout: 不支持的版式')
+    if executable_path is not None and not Path(executable_path).is_file():
+        raise ValidationError('$.executable_path: 指定的本地浏览器不存在')
     target = Path(out_path)
     if target.suffix.lower() != '.png':
         raise ValidationError('$.out: 输出扩展名必须为.png')
@@ -29,7 +35,7 @@ def export_png(data_path, out_path, width=540, scale=2, browser_channel='auto'):
     if not target.parent.is_dir():
         raise ValidationError('$.out: 输出目录不存在，请先选择已有目录')
     data = load_json(data_path)
-    rendered = render_report(data)
+    rendered = render_report(data, theme, layout, 'light')
     if not data['items']:
         raise ValidationError('$.items: 没有已核实事项，不生成空白分享长图')
     if not data.get('summary'):
@@ -39,11 +45,12 @@ def export_png(data_path, out_path, width=540, scale=2, browser_channel='auto'):
     except ImportError:
         raise ValidationError('$.runtime: PNG导出需可用的Playwright及Chromium、Chrome或Edge；HTML生成无需此依赖') from None
     channels = (None, 'chrome', 'msedge') if browser_channel == 'auto' else (None if browser_channel == 'chromium' else browser_channel,)
+    launches = [{'executable_path': str(executable_path)}] if executable_path else [{'channel': channel} for channel in channels]
     browser = None
     with sync_playwright() as playwright:
-        for channel in channels:
+        for options in launches:
             try:
-                browser = playwright.chromium.launch(headless=True, channel=channel)
+                browser = playwright.chromium.launch(headless=True, **options)
                 break
             except Exception:
                 continue
@@ -87,7 +94,7 @@ def export_png(data_path, out_path, width=540, scale=2, browser_channel='auto'):
             browser.close()
     return {
         'format': 'png', 'width': actual_width, 'height': actual_height,
-        'items': len(data['items']), 'contains': '报头、覆盖说明、顶部图表、内容摘要、全部可见事实和专题',
+        'items': len(data['items']), 'contains': '报头、覆盖说明、内容摘要、概况图表、关键数字、全部可见事实、专题与后续关注',
         'evidence_details': '折叠；完整证据仍保留于HTML和JSON',
         'network': 'blocked', 'page_scripts': 'disabled',
     }
@@ -100,9 +107,12 @@ def main(argv=None):
     parser.add_argument('--width', type=int, default=540, help='CSS宽度，360至720；默认540')
     parser.add_argument('--scale', type=int, choices=(1, 2, 3), default=2)
     parser.add_argument('--browser-channel', choices=('auto', 'chromium', 'chrome', 'msedge'), default='auto')
+    parser.add_argument('--executable-path', help='可选：本机已安装的Chromium/Chrome/Edge可执行文件路径')
+    parser.add_argument('--theme', choices=tuple(THEMES), help='配色，默认取报告presentation或classic')
+    parser.add_argument('--layout', choices=tuple(LAYOUTS), help='版式，默认取报告presentation或standard')
     args = parser.parse_args(argv)
     try:
-        result = export_png(args.data, args.out, args.width, args.scale, args.browser_channel)
+        result = export_png(args.data, args.out, args.width, args.scale, args.browser_channel, args.theme, args.layout, args.executable_path)
         print(json.dumps(result, ensure_ascii=False))
         return 0
     except (ValidationError, OSError):

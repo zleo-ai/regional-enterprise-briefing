@@ -80,7 +80,7 @@ class ConfigTests(unittest.TestCase):
                 tool.validate_config(value)
 
     def test_limits(self):
-        for field, value in [('regions', config()['regions'] * 21), ('topics', ['a'] * 31), ('enterprises', [{'name': str(i)} for i in range(101)]), ('max_items', 51), ('config_name', 'a' * 81)]:
+        for field, value in [('regions', [{'name': f'市{i}', 'parent': '江苏省', 'level': 'city'} for i in range(31)]), ('topics', ['a'] * 31), ('enterprises', [{'name': str(i)} for i in range(101)]), ('max_items', 51), ('config_name', 'a' * 81)]:
             data = config()
             data[field] = value
             with self.subTest(field=field), self.assertRaises(tool.ValidationError):
@@ -536,27 +536,25 @@ class NewPresentationTests(unittest.TestCase):
 
 
 class PublicationTests(unittest.TestCase):
-    def test_theme_map_includes_unclassified_items(self):
+    def test_theme_bars_include_unclassified_items_last(self):
         data = report()
         data['items'][0].update(theme='绿色循环', publisher_type='gov')
-        second = copy.deepcopy(data['items'][0])
-        second.update(id='item-2', event_key='event-2')
-        second.pop('theme')
-        data['items'].append(second)
+        for n in (2, 3):
+            extra = copy.deepcopy(data['items'][0])
+            extra.update(id=f'item-{n}', event_key=f'event-{n}')
+            data['items'].append(extra)
+        data['items'][2].pop('theme')
         rendered = tool.render_report(data)
-        self.assertIn('未分类', rendered)
-        self.assertIn('未分类1条', rendered)
-        block = rendered.split('class="theme-map"', 1)[1].split('</svg>', 1)[0]
-        rects = re.findall(r'<rect[^>]*width="([\d.]+)" height="([\d.]+)"', block)
-        self.assertEqual(len(rects), 2)
-        areas = [float(w) * float(h) for w, h in rects]
-        self.assertAlmostEqual(sum(areas), 64000, places=3)
-        self.assertAlmostEqual(areas[0], areas[1], places=3)
+        self.assertIn('含未分类1条', rendered)
+        block = rendered.split('<figure class="chart chart-bars"', 1)[1].split('</figure>', 1)[0]
+        rows = re.findall(r'<li( class="muted")?[^>]*><span class="bar-label">([^<]+)</span>.*?width:([\d.]+)%', block)
+        self.assertEqual([(muted, name) for muted, name, _ in rows], [('', '绿色循环'), (' class="muted"', '未分类')])
+        self.assertEqual([float(width) for _, _, width in rows], [100.0, 50.0])
 
     def test_all_missing_themes_are_not_hidden(self):
         rendered = tool.render_report(report())
-        self.assertIn('未分类1条', rendered)
-        self.assertIn('class="theme-map"', rendered)
+        self.assertIn('含未分类1条', rendered)
+        self.assertNotIn('chart-bars', rendered)
 
     def test_reader_text_and_collection_details_are_both_preserved(self):
         data = report()
@@ -624,7 +622,7 @@ class ExportBoundaryTests(unittest.TestCase):
 
     def test_export_parameters_are_bounded(self):
         exporter = self.exporter()
-        for kwargs in ({'width': 359}, {'scale': 4}, {'scale': True}, {'browser_channel': 'remote'}):
+        for kwargs in ({'width': 359}, {'scale': 4}, {'scale': True}, {'browser_channel': 'remote'}, {'theme': 'neon'}, {'layout': 'poster'}, {'executable_path': '/nonexistent/browser'}):
             with self.subTest(kwargs=kwargs), self.assertRaises(tool.ValidationError):
                 exporter.export_png('not-needed.json', 'share.png', **kwargs)
 
@@ -697,6 +695,352 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(tool.main(['validate-config', str(source)]), 0)
             self.assertEqual(json.loads(output.getvalue())['history_mode'], 'aggregate_only')
 
+
+
+ROOT = SCRIPT.parents[1]
+
+
+def multi_report(count=4):
+    data = report()
+    themes = ['先进制造', '先进制造', '绿色低碳', '数字经济', '新能源', '生物医药', '新材料', '文旅消费', '现代农业', '交通物流']
+    types = ['gov', 'enterprise', 'gov', 'other']
+    base = data['items'][0]
+    data['items'] = []
+    for n in range(count):
+        item = copy.deepcopy(base)
+        item.update(id=f'item-{n + 1}', event_key=f'event-{n + 1}', title=f'示例公告{n + 1}', theme=themes[n % len(themes)],
+                    stage='公示', publisher_type=types[n % 4], region=['苏州市', '无锡市'][n % 2],
+                    section=('政府资讯 · 发展改革' if types[n % 4] == 'gov' else '企业资讯 · 公告'))
+        data['items'].append(item)
+    return data
+
+
+class ChartTests(unittest.TestCase):
+    def test_publisher_stack_uses_counts_and_shares_sum_to_100(self):
+        data = multi_report(4)
+        rendered = tool.render_report(data)
+        block = rendered.split('<figure class="chart chart-stack"', 1)[1].split('</figure>', 1)[0]
+        self.assertEqual(re.findall(r'flex-grow:(\d+)', block), ['2', '1', '1'])
+        shares = [int(value) for value in re.findall(r'<em>(\d+)%</em>', block)]
+        self.assertEqual(sum(shares), 100)
+        self.assertIn('class="seg s1"', block)
+
+    def test_long_tail_folds_but_table_keeps_every_category(self):
+        data = multi_report(10)
+        rendered = tool.render_report(data, layout='standard')
+        block = rendered.split('<figure class="chart chart-bars"', 1)[1].split('</figure>', 1)[0]
+        self.assertEqual(block.count('<li'), 7)
+        self.assertIn('其余', block)
+        table = rendered.split('class="chart-data"', 1)[1]
+        for theme in ('交通物流', '现代农业', '文旅消费'):
+            self.assertIn(theme, table)
+
+    def test_daily_reduces_charts_and_small_samples_skip_bars(self):
+        data = multi_report(2)
+        rendered = tool.render_report(data)
+        self.assertIn('chart-stack', rendered)
+        self.assertNotIn('chart-bars', rendered)
+        data = multi_report(4)
+        self.assertNotIn('事项所在地区', tool.render_report(data))
+
+    def test_explicit_chart_selection(self):
+        data = multi_report(4)
+        data['presentation'] = {'charts': ['region', 'stage']}
+        rendered = tool.render_report(data)
+        self.assertIn('事项所在地区', rendered)
+        self.assertNotIn('chart-stack', rendered)
+        self.assertNotIn('所处阶段', rendered)  # 单一阶段不足以成图
+        data['presentation'] = {'charts': []}
+        self.assertNotIn('class="charts', tool.render_report(data))
+        for charts in (['region', 'region'], ['funnel']):
+            data['presentation'] = {'charts': charts}
+            with self.subTest(charts=charts), self.assertRaises(tool.ValidationError):
+                tool.validate_report(data)
+
+
+class TemplateTests(unittest.TestCase):
+    def test_every_theme_and_layout_is_self_contained_and_deterministic(self):
+        data = multi_report(5)
+        data['summary'] = {'text': '示例主体发布项目公示。', 'evidence_ids': ['item-1']}
+        for theme in tool.THEMES:
+            for layout in tool.LAYOUTS:
+                with self.subTest(theme=theme, layout=layout):
+                    first = tool.render_report(copy.deepcopy(data), theme, layout)
+                    self.assertEqual(first, tool.render_report(copy.deepcopy(data), theme, layout))
+                    self.assertIn(f'class="theme-{theme} layout-{layout}"', first)
+                    for banned in ('<script', 'http://fonts', '<img', 'data:image'):
+                        self.assertNotIn(banned, first)
+                    self.assertIn('id="glance"', first)
+                    self.assertIn('href="#item-1"', first)
+
+    def test_cli_options_override_report_presentation(self):
+        data = report()
+        data['presentation'] = {'theme': 'navy', 'layout': 'compact', 'color_scheme': 'light'}
+        rendered = tool.render_report(data)
+        self.assertIn('class="theme-navy layout-compact scheme-light"', rendered)
+        self.assertIn('content="light"', rendered)
+        self.assertIn('class="theme-jade layout-memo scheme-light"', tool.render_report(data, 'jade', 'memo'))
+        with self.assertRaises(tool.ValidationError):
+            tool.render_report(data, theme='neon')
+        with tempfile.TemporaryDirectory() as root:
+            source, target = Path(root) / 'data.json', Path(root) / 'out.html'
+            source.write_text(json.dumps(report()), encoding='utf-8')
+            self.assertEqual(tool.main(['render', '--data', str(source), '--out', str(target), '--theme', 'ink', '--layout', 'memo']), 0)
+            self.assertIn('theme-ink layout-memo', target.read_text(encoding='utf-8'))
+
+    def test_memo_puts_summary_first_and_numbers_chapters(self):
+        data = multi_report(4)
+        data['summary'] = {'text': '示例主体发布项目公示。', 'evidence_ids': ['item-1']}
+        data['sections'] = [{'heading': '周期信号', 'body': '判断', 'evidence_ids': ['item-1']}]
+        data['watchlist'] = [{'text': '关注正式批复。'}]
+        rendered = tool.render_report(data, layout='memo')
+        self.assertLess(rendered.index('id="glance"'), rendered.index('class="source-section"'))
+        self.assertNotIn('class="dashboard"', rendered)
+        for heading in ('一、政府资讯', '二、企业资讯', '三、专题分析', '四、后续关注', '内容提要'):
+            self.assertIn(heading, rendered)
+
+    def test_items_are_numbered_in_display_order(self):
+        data = multi_report(4)
+        rendered = tool.render_report(data)
+        order = re.findall(r'<article class="item" id="item-(\d+)">', rendered)
+        self.assertEqual(order, ['1', '2', '3', '4'])
+        titles = re.findall(r'<h4>([^<]+)</h4>', rendered)
+        self.assertEqual(titles, ['示例公告1', '示例公告3', '示例公告2', '示例公告4'])
+
+    def test_dark_mode_is_scoped_to_screen_and_light_scheme_opt_out(self):
+        css = (ROOT / 'assets' / 'report.css').read_text(encoding='utf-8')
+        self.assertIn('@media screen and (prefers-color-scheme:dark)', css)
+        for theme in tool.THEMES:
+            self.assertIn(f'.theme-{theme}{{', css)
+            self.assertIn(f'.theme-{theme}:not(.scheme-light){{', css)
+
+
+class ContentBlockTests(unittest.TestCase):
+    def test_key_figures_cite_existing_evidence(self):
+        data = report()
+        data['key_figures'] = [{'label': '计划投资', 'value': '18亿元', 'note': '公告计划口径', 'evidence_ids': ['item-1']}]
+        rendered = tool.render_report(data)
+        self.assertIn('18亿元', rendered)
+        self.assertIn('公告计划口径', rendered)
+        for figure in ({'label': 'a', 'value': '1', 'note': 'n', 'evidence_ids': []},
+                       {'label': 'a', 'value': '1', 'note': 'n', 'evidence_ids': ['absent']},
+                       {'label': 'a', 'value': '1', 'evidence_ids': ['item-1']},
+                       {'label': 'a' * 31, 'value': '1', 'note': 'n', 'evidence_ids': ['item-1']}):
+            data['key_figures'] = [figure]
+            with self.subTest(figure=figure), self.assertRaises(tool.ValidationError):
+                tool.validate_report(data)
+        data['key_figures'] = [{'label': 'a', 'value': '1', 'note': 'n', 'evidence_ids': ['item-1']}] * 7
+        with self.assertRaises(tool.ValidationError):
+            tool.validate_report(data)
+
+    def test_key_figures_need_items(self):
+        data = report()
+        data.update(status='observation', items=[])
+        data['key_figures'] = [{'label': 'a', 'value': '1', 'note': 'n', 'evidence_ids': ['item-1']}]
+        with self.assertRaisesRegex(tool.ValidationError, 'key_figures'):
+            tool.validate_report(data)
+
+    def test_watchlist_issue_priority_and_escaping(self):
+        data = report()
+        payload = '<script>alert(1)</script>'
+        data['issue'] = '第12期'
+        data['watchlist'] = [{'text': payload, 'evidence_ids': ['item-1']}, {'text': '关注下期公示'}]
+        data['items'][0]['priority'] = 'high'
+        rendered = tool.render_report(data)
+        self.assertIn('第12期', rendered)
+        self.assertIn('后续关注', rendered)
+        self.assertIn('关注下期公示', rendered)
+        self.assertIn('>重点<', rendered)
+        self.assertNotIn('<script>', rendered)
+        for bad in ({'text': 'x', 'evidence_ids': ['absent']}, {'text': ''}, {'text': 'x', 'extra': 1}):
+            data['watchlist'] = [bad]
+            with self.subTest(bad=bad), self.assertRaises(tool.ValidationError):
+                tool.validate_report(data)
+        data['watchlist'] = []
+        data['items'][0]['priority'] = 'urgent'
+        with self.assertRaisesRegex(tool.ValidationError, 'priority'):
+            tool.validate_report(data)
+        data['items'][0]['priority'] = 'normal'
+        data['issue'] = 'x' * 31
+        with self.assertRaisesRegex(tool.ValidationError, 'issue'):
+            tool.validate_report(data)
+
+    def test_run_notes_show_readable_audience(self):
+        data = report()
+        data['audience'] = 'investment_promotion'
+        self.assertIn('阅读视角：招商引资（investment_promotion）', tool.render_report(data))
+        self.assertEqual(set(tool.AUDIENCES), set(tool.AUDIENCE_LABELS))
+
+
+class SpecialKindTests(unittest.TestCase):
+    def special(self):
+        data = report()
+        data.update(kind='special', title='企业专题追踪')
+        data['period'].update(start='2024-02-01T00:00:00+08:00', end_exclusive='2024-03-01T00:00:00+08:00', cutoff='2024-03-01T00:00:00+08:00')
+        data['coverage'].update(expected_days=29, available_days=29)
+        return data
+
+    def test_window_special_inclusive_dates(self):
+        value = tool.compute_window('special', '2024-03-15T09:00:00+08:00', '2024-02-01/2024-02-29')
+        self.assertEqual(value['start'], '2024-02-01T00:00:00+08:00')
+        self.assertEqual(value['end_exclusive'], '2024-03-01T00:00:00+08:00')
+        clipped = tool.compute_window('special', '2024-03-15T09:00:00+08:00', '2024-03-01/2024-03-31')
+        self.assertEqual(clipped['end_exclusive'], '2024-03-15T09:00:00+08:00')
+        for period in (None, '2024-02-01', '2024-02-29/2024-02-01', '2023-01-01/2024-01-02', '2024-03-16/2024-03-20'):
+            with self.subTest(period=period), self.assertRaises(tool.ValidationError):
+                tool.compute_window('special', '2024-03-15T09:00:00+08:00', period)
+
+    def test_special_report_renders_with_custom_span(self):
+        data = self.special()
+        rendered = tool.render_report(data)
+        self.assertIn('专题观察', rendered)
+        self.assertIn('2024年2月1日—2月29日', rendered)
+        self.assertIn('正式简报', rendered)
+
+    def test_special_period_limits(self):
+        data = self.special()
+        data['period']['start'] = '2023-02-01T00:00:00+08:00'
+        data['coverage'].update(expected_days=394, available_days=394)
+        with self.assertRaises(tool.ValidationError):
+            tool.validate_report(data)
+        data = self.special()
+        data['period']['start'] = '2024-02-01T08:00:00+08:00'
+        with self.assertRaisesRegex(tool.ValidationError, '00:00'):
+            tool.validate_report(data)
+
+
+class RegionScopeTests(unittest.TestCase):
+    def test_any_province_and_region_label(self):
+        value = config()
+        value['regions'] = [{'name': name, 'parent': '中国', 'level': 'province'} for name in ('上海市', '江苏省', '浙江省', '安徽省')]
+        value['region_label'] = '长三角'
+        value['presentation'] = {'theme': 'navy', 'layout': 'compact'}
+        normalized = tool.validate_config(value)
+        self.assertEqual(normalized['region_label'], '长三角')
+        self.assertEqual(normalized['presentation'], {'theme': 'navy', 'layout': 'compact'})
+
+    def test_country_scope_needs_focus(self):
+        value = config()
+        value['regions'] = [{'name': '中国', 'level': 'country'}]
+        with self.assertRaisesRegex(tool.ValidationError, '全国'):
+            tool.validate_config(value)
+        value.update(topics=['储能'], scope_mode='any')
+        with self.assertRaisesRegex(tool.ValidationError, '全国'):
+            tool.validate_config(value)
+        value['scope_mode'] = 'all'
+        self.assertEqual(tool.validate_config(value)['regions'][0], {'name': '中国', 'parent': '', 'level': 'country'})
+        value['regions'].append({'name': '江苏省', 'parent': '中国', 'level': 'province'})
+        with self.assertRaisesRegex(tool.ValidationError, '并列'):
+            tool.validate_config(value)
+
+    def test_non_country_still_requires_parent(self):
+        value = config()
+        del value['regions'][0]['parent']
+        with self.assertRaisesRegex(tool.ValidationError, r'\$\.regions\[0\]\.parent'):
+            tool.validate_config(value)
+
+    def test_bad_presentation_in_config(self):
+        for presentation in ({'theme': 'neon'}, {'layout': 'poster'}, {'color_scheme': 'dark'}, {'font': 'x'}, 'navy'):
+            value = config()
+            value['presentation'] = presentation
+            with self.subTest(presentation=presentation), self.assertRaises(tool.ValidationError):
+                tool.validate_config(value)
+
+
+class LintTests(unittest.TestCase):
+    def levels(self, data):
+        return [(f['level'], f['path']) for f in tool.lint_report(data)['findings']]
+
+    def test_clean_report_scores_high(self):
+        data = report()
+        data['items'][0].update(theme='先进制造', stage='公示', publisher_type='gov')
+        data['summary'] = {'text': '示例企业年产5万吨项目进入环评拟批准公示，公示期5个工作日，审批决定尚未公开；同期另一项目完成备案，均处于前期手续阶段。', 'evidence_ids': ['item-1']}
+        result = tool.lint_report(data)
+        self.assertEqual(result['errors'], 0, result)
+        self.assertEqual(result['warnings'], 0, result)
+        self.assertGreaterEqual(result['score'], 95)
+
+    def test_count_template_summary_is_error(self):
+        data = report()
+        data['summary'] = {'text': '本期共收录12条，政府资讯8条，企业资讯4条。', 'evidence_ids': ['item-1']}
+        self.assertIn(('error', '$.summary.text'), self.levels(data))
+
+    def test_reader_text_rules(self):
+        data = report()
+        item = data['items'][0]
+        item['reader_summary'] = '日期00:00为编码占位。'
+        item['reader_analysis'] = '该企业贷款需求较大，可作为营销机会。'
+        item['title'] = '重磅！示例项目开工'
+        found = self.levels(data)
+        self.assertIn(('error', '$.items[0].reader_summary'), found)
+        self.assertIn(('error', '$.items[0].reader_analysis'), found)
+        self.assertIn(('warning', '$.items[0].title'), found)
+        self.assertIn(('warning', '$.items[0]'), found)  # 缺少theme/stage/publisher_type
+
+    def test_process_notes_allowed_in_collection_fields_when_reader_text_exists(self):
+        data = report()
+        data['items'][0].update(summary='网页日期00:00为编码占位。', reader_summary='项目进入公示。', theme='a', stage='b', publisher_type='gov')
+        self.assertNotIn('error', [level for level, _ in self.levels(data)])
+
+    def test_fragmented_themes_and_missing_sections(self):
+        data = multi_report(8)
+        data['kind'] = 'weekly'
+        data['period'].update(start='2024-02-26T00:00:00+08:00', end_exclusive='2024-03-04T00:00:00+08:00', cutoff='2024-03-04T07:00:00+08:00')
+        data['coverage'].update(expected_days=7, available_days=7)
+        for n, item in enumerate(data['items']):
+            item['theme'] = f'主题{n}'
+        found = self.levels(data)
+        self.assertIn(('warning', '$.items'), found)
+        self.assertIn(('warning', '$.sections'), found)
+
+    def test_cli_exit_codes(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'data.json'
+            data = report()
+            data['summary'] = {'text': '本期共收录1条。', 'evidence_ids': ['item-1']}
+            path.write_text(json.dumps(data), encoding='utf-8')
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(tool.main(['lint', '--data', str(path)]), 1)
+            self.assertIn('"errors": 1', output.getvalue())
+            del data['summary']
+            path.write_text(json.dumps(data), encoding='utf-8')
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(tool.main(['lint', '--data', str(path)]), 0)
+                self.assertEqual(tool.main(['lint', '--data', str(path), '--strict']), 1)
+
+    def test_options_lists_templates(self):
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(tool.main(['options']), 0)
+        value = json.loads(output.getvalue())
+        self.assertEqual(set(value['themes']), set(tool.THEMES))
+        self.assertIn('special', value['kinds'])
+
+
+class ExampleFileTests(unittest.TestCase):
+    def test_example_configs_validate(self):
+        paths = sorted((ROOT / 'examples').glob('config-*.json'))
+        self.assertGreaterEqual(len(paths), 4)
+        for path in paths:
+            with self.subTest(path=path.name):
+                tool.validate_config(tool.load_json(path))
+
+    def test_example_reports_render_and_have_no_lint_errors(self):
+        paths = sorted((ROOT / 'examples').glob('report-*.json')) + sorted((ROOT / 'examples' / 'gallery').glob('*.json'))
+        self.assertGreaterEqual(len(paths), 4)
+        for path in paths:
+            data = tool.load_json(path)
+            with self.subTest(path=path.name):
+                self.assertIn('<main class="page">', tool.render_report(data))
+                self.assertEqual(tool.lint_report(data)['errors'], 0)
+
+    def test_gallery_is_clearly_fictional(self):
+        for path in (ROOT / 'examples' / 'gallery').glob('*.json'):
+            data = tool.load_json(path)
+            with self.subTest(path=path.name):
+                self.assertIn('虚构', data['title'] + data['config_summary'])
+                for item in data['items']:
+                    for source in item['sources']:
+                        self.assertRegex(source['url'], r'^https://example\.(com|org|net)/')
 
 if __name__ == '__main__':
     unittest.main()

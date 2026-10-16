@@ -1,0 +1,82 @@
+[
+  {
+    "query": "帮我整理一下昨天苏州的政策和项目新闻，做成晨报",
+    "should_trigger": true
+  },
+  {
+    "query": "出一份江西赣州上周的政企周报",
+    "should_trigger": true
+  },
+  {
+    "query": "长三角集成电路项目本月动态汇总成简报",
+    "should_trigger": true
+  },
+  {
+    "query": "追踪某公司最近半年在各地的投资项目公告",
+    "should_trigger": true
+  },
+  {
+    "query": "把这周的园区招商签约、环评公示整理一下给领导看",
+    "should_trigger": true
+  },
+  {
+    "query": "全国新型储能项目本月进展专题",
+    "should_trigger": true
+  },
+  {
+    "query": "把已经做好的政企周报导出成分享长图",
+    "should_trigger": true
+  },
+  {
+    "query": "帮我看看成都高新区最近有哪些招标和中标公告，按周汇总",
+    "should_trigger": true
+  },
+  {
+    "query": "这份区域简报的速览写得不好，按规范重写",
+    "should_trigger": true
+  },
+  {
+    "query": "上个月合肥新能源汽车产业链的政策和企业动态做个月报",
+    "should_trigger": true
+  },
+  {
+    "query": "帮我写一封给客户的拜访邮件",
+    "should_trigger": false
+  },
+  {
+    "query": "分析一下这只股票明天会不会涨",
+    "should_trigger": false
+  },
+  {
+    "query": "把这份Excel里的销售数据做成图表",
+    "should_trigger": false
+  },
+  {
+    "query": "查一下张三的个人征信和联系方式",
+    "should_trigger": false
+  },
+  {
+    "query": "翻译这篇英文新闻稿",
+    "should_trigger": false
+  },
+  {
+    "query": "写一个Python爬虫抓取政府网站全部页面",
+    "should_trigger": false
+  },
+  {
+    "query": "帮我做一份公司内部的季度经营分析PPT",
+    "should_trigger": false
+  },
+  {
+    "query": "今天北京天气怎么样",
+    "should_trigger": false
+  },
+  {
+    "query": "帮我审批这笔贷款，给出额度建议",
+    "should_trigger": false
+  },
+  {
+    "query": "总结一下这篇论文的主要贡献",
+    "should_trigger": false
+  }
+]

@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "config_name": "多地区公开研究示例",
+  "audience": "regional",
+  "regions": [
+    {
+      "name": "赣州市",
+      "parent": "江西省",
+      "level": "city"
+    },
+    {
+      "name": "九江市",
+      "parent": "江西省",
+      "level": "city"
+    },
+    {
+      "name": "上饶市",
+      "parent": "江西省",
+      "level": "city"
+    },
+    {
+      "name": "景德镇市",
+      "parent": "江西省",
+      "level": "city"
+    }
+  ],
+  "enterprises": [
+    {
+      "name": "江西铜业股份有限公司",
+      "aliases": [],
+      "include_subsidiaries": false
+    },
+    {
+      "name": "江西赣锋锂业集团股份有限公司",
+      "aliases": [],
+      "include_subsidiaries": false
+    }
+  ],
+  "topics": [
+    "制造业数智化转型",
+    "重大产业项目"
+  ],
+  "scope_mode": "any",
+  "timezone": "Asia/Shanghai",
+  "history_mode": "aggregate_only",
+  "max_items": 12
+}
