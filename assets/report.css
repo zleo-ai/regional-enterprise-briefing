@@ -24,7 +24,7 @@ h1,h2,h3,h4{font-weight:650;line-height:1.45;text-wrap:pretty}
 a{color:var(--link);text-decoration-thickness:1px;text-underline-offset:3px;overflow-wrap:anywhere}
 a:hover{text-decoration-thickness:2px}
 a:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:2px}
-.page{width:min(1180px,calc(100% - 64px));margin:36px auto;background:var(--paper);padding:44px 56px 28px;border-top:5px solid var(--accent);border-radius:2px;box-shadow:0 10px 40px var(--shadow)}
+.page{overflow-wrap:anywhere;width:min(1180px,calc(100% - 64px));margin:36px auto;background:var(--paper);padding:44px 56px 28px;border-top:5px solid var(--accent);border-radius:2px;box-shadow:0 10px 40px var(--shadow)}
 .kicker{display:block;font-size:11px;letter-spacing:.14em;color:var(--accent);font-weight:700}
 .icon{width:14px;height:14px;flex:0 0 14px}
 
@@ -53,9 +53,9 @@ h1{font-size:36px;line-height:1.35;letter-spacing:.02em;color:var(--accent-stron
 .stats dd{font-size:28px;line-height:1.35;font-weight:650;color:var(--ink)}
 .stats dd small{margin-left:4px;font-size:12px;font-weight:400;color:var(--muted)}
 .stats .stat-note{font-size:11px;line-height:1.6;font-weight:400;color:var(--muted)}
-.charts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:16px}
+.charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:16px}
 .charts.n1{grid-template-columns:minmax(0,560px)}
-.charts.n2,.charts.n4{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media(min-width:1100px){.layout-standard .charts.n3,.layout-standard .charts.n5{grid-template-columns:repeat(3,minmax(0,1fr))}}
 .chart{min-width:0;padding:18px 20px 14px;background:var(--panel);border:1px solid var(--line);border-radius:6px}
 .chart h3{font-size:17px;margin:2px 0 12px}
 .unit{margin-left:8px;font-size:11px;font-weight:400;color:var(--muted)}
@@ -78,11 +78,11 @@ h1{font-size:36px;line-height:1.35;letter-spacing:.02em;color:var(--accent-stron
 .bar-track{display:block;height:12px}
 .bar-fill{display:block;height:100%;min-width:3px;background:var(--bar);border-radius:0 4px 4px 0}
 .bars .muted .bar-fill{background:var(--c0)}
-.bars .muted .bar-label{color:var(--muted)}
+.bars .muted .bar-label,.bars .rest .bar-value{color:var(--muted)}
 .bar-value{text-align:right;font-size:14px;font-weight:650;font-variant-numeric:tabular-nums}
 .chart-data{margin-top:12px;border-bottom:0}
 .chart-data summary{padding:6px 0;font-size:12px;font-weight:500;color:var(--muted)}
-.table-wrap{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:12px 20px;padding:6px 0 4px}
+.table-wrap{display:grid;align-items:start;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:12px 20px;padding:6px 0 4px}
 .table-wrap table{width:100%;border-collapse:collapse;font-size:12px;color:var(--ink-2)}
 .table-wrap caption{text-align:left;font-weight:600;padding-bottom:4px;color:var(--ink)}
 .table-wrap th,.table-wrap td{padding:4px 6px;border-bottom:1px solid var(--line);text-align:right;font-weight:400;font-variant-numeric:tabular-nums}
@@ -114,6 +114,7 @@ h1{font-size:36px;line-height:1.35;letter-spacing:.02em;color:var(--accent-stron
 .subgroup-title{display:flex;align-items:center;gap:8px;padding-bottom:12px;font-size:16px;color:var(--ink-2)}
 .layout-standard .subgroup-title::before,.layout-compact .subgroup-title::before{content:"";flex:0 0 4px;height:15px;background:var(--accent);border-radius:2px}
 .item-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;align-items:start}
+.source-section>.item-grid{margin-top:20px}
 .item-grid>.item:only-child{grid-column:1/-1}
 .item{min-width:0;padding:22px 24px;background:var(--paper);border:1px solid var(--line);border-radius:6px;scroll-margin-top:24px}
 .item:target{outline:2px solid var(--accent);outline-offset:2px}
@@ -175,7 +176,7 @@ footer>p:first-child{margin-bottom:5px;color:var(--ink-2)}
 /* ---------- 8. 速读版 compact：单栏列表，适合晨报与手机 ---------- */
 .layout-compact .page{width:min(800px,calc(100% - 48px));padding:36px 44px 24px}
 .layout-compact h1{font-size:30px}
-.layout-compact .stats dd{font-size:22px}
+.layout-compact .stats dd:not(.stat-note){font-size:22px}
 .layout-compact .charts{grid-template-columns:1fr}
 .layout-compact .glance>p{font-size:17px}
 .layout-compact .source-section{margin-top:32px}
@@ -214,6 +215,7 @@ footer>p:first-child{margin-bottom:5px;color:var(--ink-2)}
 .memo-analysis{margin-top:4px;color:var(--ink-2)}
 .memo-analysis b{font-weight:650}
 .memo-meta,.memo-source{margin-top:4px;font-size:12px;color:var(--muted)}
+.nobr{white-space:nowrap}
 .layout-memo .feature{padding:0;margin-bottom:18px;background:none;border:0;border-radius:0}
 .layout-memo .feature h3{font-family:var(--serif);font-size:17px}
 .layout-memo .feature>p{text-indent:2em;font-size:16px}
@@ -229,7 +231,6 @@ footer>p:first-child{margin-bottom:5px;color:var(--ink-2)}
   .stats{grid-template-columns:repeat(2,minmax(0,1fr))}
   .stats>div:nth-child(3){border-left:0}
   .stats>div:nth-child(n+3){border-top:1px solid var(--line)}
-  .charts,.charts.n2,.charts.n4{grid-template-columns:repeat(2,minmax(0,1fr))}
   .layout-compact .charts{grid-template-columns:1fr}
   .item-grid,.feature-grid{grid-template-columns:1fr}
   .glance>p{font-size:18px}
@@ -240,7 +241,8 @@ footer>p:first-child{margin-bottom:5px;color:var(--ink-2)}
   /* 手机先读速览再看图表；DOM顺序不变，桌面与打印仍为图表在前 */
   .layout-standard .page,.layout-compact .page{display:flex;flex-direction:column}
   .layout-standard .glance~*,.layout-compact .glance~*{order:2}
-  .layout-standard .dashboard,.layout-compact .dashboard{order:1}
+  .layout-standard .dashboard,.layout-compact .dashboard{order:1;margin-bottom:0}
+  .layout-standard .figures,.layout-compact .figures{margin:30px 0 0}
   .figure-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
   .figure{padding:12px 14px}
   .figure-value{font-size:24px}
@@ -251,8 +253,8 @@ footer>p:first-child{margin-bottom:5px;color:var(--ink-2)}
   .scope p,.notice{display:block}
   .scope b,.notice b{display:block;margin-bottom:2px}
   .stats>div{padding:12px 14px}
-  .stats dd{font-size:24px}
-  .charts,.charts.n1,.charts.n2,.charts.n4{grid-template-columns:1fr}
+  .stats dd:not(.stat-note){font-size:24px}
+  .charts,.charts.n1{grid-template-columns:1fr}
   .chart{padding:16px}
   .bars li{grid-template-columns:minmax(0,6.5em) minmax(0,1fr) 2em}
   .glance{padding:16px 18px;margin-bottom:26px}
@@ -260,8 +262,8 @@ footer>p:first-child{margin-bottom:5px;color:var(--ink-2)}
   .layout-memo .glance{padding:14px 0}
   .source-section,.features,.watchlist{margin-top:30px}
   .section-heading h2{font-size:22px}
-  .item{padding:18px 16px}
-  .item h4{font-size:19px}
+  .item-grid>.item{padding:18px 16px}
+  .item-grid .item h4{font-size:19px}
   .compact-item{padding:14px 0}
   .sources p{display:block}
   .sources p>span{display:block}
@@ -288,4 +290,9 @@ body.poster .chart-data{display:none}
   a{color:inherit}
   .chart,.glance,.stats,.figure,.seg,.bar-fill,.sw,.dot,.badge{-webkit-print-color-adjust:exact;print-color-adjust:exact}
   .chart-data{display:none}
+  .sources a::after,.compact-source a::after,.memo-source a::after{content:" " attr(href);font-size:9pt;color:#555;overflow-wrap:anywhere}
+  summary{list-style:none}
+  summary::marker{content:""}
 }
+/* 打印时展开折叠的核验记录（支持::details-content的浏览器）；不支持时由上方链接地址兜底 */
+@media print{details::details-content{content-visibility:visible;display:block}}

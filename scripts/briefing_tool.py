@@ -11,6 +11,9 @@ import unicodedata
 from datetime import date, datetime, time, timedelta, timezone
 from urllib.parse import parse_qsl, urlsplit
 
+# 渲染时按路径加载模板模块，不在技能安装目录写入__pycache__。
+sys.dont_write_bytecode = True
+
 TZ = timezone(timedelta(hours=8), 'Asia/Shanghai')
 MAX_BYTES = 256 * 1024
 MAX_REGIONS = 30
@@ -43,6 +46,8 @@ LAYOUTS = {'standard': '标准版', 'compact': '速读版', 'memo': '要报版'}
 COLOR_SCHEMES = ('auto', 'light')
 CHART_KINDS = ('publisher', 'theme', 'region', 'enterprise', 'stage')
 REPORT_KINDS = ('daily', 'weekly', 'monthly', 'special')
+# live_public：当期公开采集；aggregate_only：只汇总已有存档；backfill_public：事后按历史周期公开补采。
+COVERAGE_METHODS = ('live_public', 'aggregate_only', 'backfill_public')
 
 
 class ValidationError(ValueError):
@@ -95,8 +100,9 @@ def obj(value, path, required, optional=()):
 def text(value, path, maximum=200, empty=False):
     if type(value) is not str:
         fail(path, '必须是字符串')
-    if any(unicodedata.category(c) in ('Cc', 'Cs') for c in value):
-        fail(path, '字符串含控制字符或无效Unicode字符')
+    # Cf含零宽字符与双向覆盖符：会绕过措辞检查或让后续模板文字倒序显示。
+    if any(unicodedata.category(c) in ('Cc', 'Cf', 'Cs') for c in value):
+        fail(path, '字符串含控制字符、不可见格式字符或无效Unicode字符')
     value = value.strip()
     if len(value) > maximum or (not empty and not value):
         fail(path, f'字符串长度必须为{0 if empty else 1}至{maximum}')
@@ -167,6 +173,8 @@ def validate_config(data):
         level = enum(region['level'], p + '.level', ('country', 'province', 'city', 'county'))
         if level != 'country' and 'parent' not in region:
             fail(p + '.parent', '缺少必填字段')
+        if level == 'country' and text(region['name'], p + '.name') != '中国':
+            fail(p + '.name', '全国范围的名称必须为“中国”')
         normalized = {'name': text(region['name'], p + '.name'),
                       'parent': text(region.get('parent', ''), p + '.parent', empty=level == 'country'),
                       'level': level}
@@ -226,14 +234,20 @@ def validate_config(data):
     return result
 
 
+def normalize_fraction(value):
+    """把1–6位小数秒补齐为6位，使Python 3.10与3.11+解析结果一致。"""
+    return re.sub(r'(?<=:\d{2})\.(\d{1,6})', lambda m: '.' + m.group(1).ljust(6, '0'), value, count=1)
+
+
 def iso_datetime(value, path):
-    value = text(value, path, 80)
+    if text(value, path, 80) != value:
+        fail(path, '日期时间不得含首尾空白')
     if not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})', value):
         fail(path, '必须是带时区的ISO日期时间（含秒）')
     if value[-1] != 'Z' and (int(value[-5:-3]) > 23 or int(value[-2:]) > 59):
         fail(path, '无效时区偏移')
     try:
-        parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        parsed = datetime.fromisoformat(normalize_fraction(value).replace('Z', '+00:00'))
         if parsed.utcoffset() is None:
             fail(path, '缺少时区')
         return parsed.astimezone(TZ)
@@ -242,7 +256,8 @@ def iso_datetime(value, path):
 
 
 def iso_date(value, path):
-    value = text(value, path, 10)
+    if text(value, path, 10) != value:
+        fail(path, '日期不得含首尾空白')
     if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
         fail(path, '必须是YYYY-MM-DD日期')
     try:
@@ -285,6 +300,8 @@ def compute_window(kind, as_of, period=None):
             end_day = last_day + timedelta(days=1)
             if (end_day - start_day).days > 366:
                 fail('$.period', '专题周期不超过366个自然日')
+            if datetime.combine(end_day, time(), TZ) > now and now.timetz().replace(tzinfo=None) == time():
+                fail('$.as_of', '进行中的专题截止时点不能恰为00:00，否则无法与已完结专题区分；请使用实际运行时点')
         start = datetime.combine(start_day, time(), TZ)
         end = datetime.combine(end_day, time(), TZ)
     except ValidationError:
@@ -293,13 +310,12 @@ def compute_window(kind, as_of, period=None):
         fail('$.period', '无效周期或日期超出范围')
     if start >= now:
         fail('$.period', '不允许未来或零长度周期')
-    return {'start': start.isoformat(), 'end_exclusive': min(end, now).isoformat(),
-            'cutoff': now.isoformat(), 'timezone': 'Asia/Shanghai'}
+    # 只输出可直接写入04-final.json period的三个字段；时区固定为北京时间。
+    return {'start': start.isoformat(), 'end_exclusive': min(end, now).isoformat(), 'cutoff': now.isoformat()}
 
 
 def safe_url(value, path):
-    value = text(value, path, 4096)
-    if any(c.isspace() for c in value) or '\\' in value:
+    if text(value, path, 4096) != value or any(c.isspace() for c in value) or '\\' in value:
         fail(path, '链接含不安全字符')
     try:
         parts = urlsplit(value)
@@ -410,7 +426,7 @@ def validate_report(data):
         fail('$.coverage.gaps', '部分周期必须说明未完成的周期与覆盖局限')
     for i, gap in enumerate(gaps):
         text(gap, f'$.coverage.gaps[{i}]', 2000)
-    enum(coverage['method'], '$.coverage.method', ('aggregate_only', 'backfill_public'))
+    enum(coverage['method'], '$.coverage.method', COVERAGE_METHODS)
     if status == 'formal' and (gaps or available != expected):
         fail('$.coverage', '正式简报必须覆盖完整且无缺口')
     items = array(data['items'], '$.items', 1000)
@@ -511,19 +527,30 @@ def validate_report(data):
 # ---------------------------------------------------------------------------
 # 内容质量检查：只做可机器判断的写作规范提示，不判断真实性、独立性或主题语义。
 
-# 只匹配“本期收录N条”“政府资讯N条”这类自指计数；“政府发布12条措施”等政策名称不算。
+# 只匹配“本期收录N条”“政府资讯N条”这类自指计数；“政府发布12条措施”“本月3条新规施行”等不算。
 _COUNT_TAIL = r'\d+\s*(?:条|则)(?=$|[^一-鿿]|事项|信息|资讯|动态|新闻|内容)'
-COUNT_SUMMARY = re.compile(r'(?:本期|本周|本月|本次|今日|昨日|本报)(?:共计|合计|共)?(?:收录|核实|整理|编制|汇总|包含|涉及)?(?:已核实)?\s*' + _COUNT_TAIL
-                           + r'|(?:政府|企业|其他)(?:资讯|来源)\s*' + _COUNT_TAIL)
-PROCESS_NOTES = (r'编码占位', r'占位符', r'证据根', r'抓取(?:时间|日期|时点|于)', r'爬取', r'采集脚本', r'检索时点', r'非承载网站',
-                 r'精确分配', r'已标注\s*\d+\s*/\s*\d+', r'retrieved_at', r'placeholder')
+_SELF = r'(?:本期|本周|本月|本次|今日|昨日|本报)(?:简报|周报|月报|日报|快报)?'
+_AGG = r'(?:共计|合计|累计|共有|共)?(?:收录|核实|整理|编制|汇总|精选|包含|涉及)?了?的?'
+_NOUN = r'(?:(?:已核实|公开|重点|区域|政企)的?)?(?:事项|信息|资讯|动态|新闻|内容|要闻)'
+COUNT_SUMMARY = re.compile(_SELF + _AGG + _NOUN + r'?\s*\d+\s*(?:条|则)(?=$|[^一-鿿]|' + _NOUN + r'|中)'
+                           + r'|(?:本期|本周|本月|本报)(?:简报|周报|月报)?' + _AGG + r'\d+\s*项(?=$|[^一-鿿]|' + _NOUN + r')'
+                           + r'|(?:政府|企业|其他)(?:资讯|来源|类)\s*' + _COUNT_TAIL)
+PROCESS_NOTES = (r'编码占位', r'占位符', r'证据根', r'(?:抓取|检索)(?:时间|日期|时点|于)', r'采集(?:时间|日期|时点)', r'列表页?日期',
+                 r'爬取', r'采集脚本', r'非承载网站', r'精确分配', r'已标注\s*\d+\s*/\s*\d+', r'retrieved_at', r'placeholder')
 # 推断性措辞：任何字段都不允许。
-CREDIT_INFERENCE = ('可授信', '建议授信', '授信建议', '额度建议', '贷款需求', '融资需求旺盛', '营销机会', '营销建议', '营销切入',
-                    '抢占客户', '拜访客户', '上门拜访', '客户经理可')
+CREDIT_INFERENCE = (r'可授信', r'建议授信', r'授信建议', r'额度建议', r'(?<!合理)贷款需求(?!指数)', r'融资需求旺盛', r'营销机会', r'营销建议',
+                    r'营销切入', r'抢占客户', r'客户经理可', r'建议(?:由)?客户经理')
+# 同样的推断，但这些词也常见于事实报道（领导走访企业、满足融资需求的政策），只在分析类文字中报错。
+CREDIT_INFERENCE_ANALYSIS = (r'拜访客户', r'上门拜访', r'(?:融资|资金|贷款|信贷)需求(?:旺盛|较大|较强)', r'授信潜力', r'营销潜力',
+                             r'(?:可|建议|宜)(?:重点|优先|择机)营销', r'业务切入点')
 # 可能是公开披露事实（如银政签约“意向授信额度”），只在分析类文字中提醒。
-CREDIT_FACT = ('授信额度', '放款')
-INVESTMENT_ADVICE = ('建议买入', '建议增持', '建议卖出', '建议减持', '目标价', '推荐买入', '值得投资', '稳赚', '收益承诺')
-HYPE = ('重磅', '炸裂', '震撼', '史上最', '全面爆发', '爆发式', '王炸', '必将', '利好', '利空', '狂飙', '血洗')
+CREDIT_FACT = (r'授信额度', r'放款')
+INVESTMENT_ADVICE = (r'建议(?:买入|增持|卖出|减持)', r'推荐买入', r'目标价(?!格)', r'(?<![“"「『‘])稳赚', r'值得投资',
+                     r'(?:买入|增持|减持|卖出)[”"」]?评级', r'逢低(?:布局|买入|吸纳)', r'(?:适当|逢低|继续)加仓', r'股价有望')
+# 风险提示、处罚事实中常引用的说法，只在分析类文字中报错。
+INVESTMENT_ADVICE_ANALYSIS = (r'收益承诺',)
+HYPE = (r'重磅', r'炸裂', r'震撼', r'史上最', r'全面爆发', r'爆发式', r'王炸', r'必将', r'(?<![盈获毛净])利好', r'利空(?!间)', r'狂飙', r'血洗')
+_INVISIBLE = re.compile(r'[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]')
 
 
 def lint_report(data):
@@ -534,23 +561,26 @@ def lint_report(data):
     def add(level, path, message):
         findings.append({'level': level, 'path': path, 'message': message})
 
+    def matches(patterns, value):
+        for pattern in patterns:
+            found = re.search(pattern, value)
+            if found:
+                yield found.group(0)
+
     def scan(value, path, process=False, analysis=False):
         """所有会出现在页面上的文字都查推断与渲染措辞；process只查读者正文，analysis查分析类文字。"""
+        value = _INVISIBLE.sub('', value or '')
         if not value:
             return
-        for word in CREDIT_INFERENCE:
-            if word in value:
-                add('error', path, f'含“{word}”：不得从公开信息推断贷款需求、授信或营销安排')
-        for word in INVESTMENT_ADVICE:
-            if word in value:
-                add('error', path, f'含“{word}”：不得给出投资建议或收益判断')
-        for word in HYPE:
-            if word in value:
-                add('warning', path, f'含“{word}”：避免渲染性或带交易含义的措辞')
+        for word in matches(CREDIT_INFERENCE + (CREDIT_INFERENCE_ANALYSIS if analysis else ()), value):
+            add('error', path, f'含“{word}”：不得从公开信息推断贷款需求、授信或营销安排')
+        for word in matches(INVESTMENT_ADVICE + (INVESTMENT_ADVICE_ANALYSIS if analysis else ()), value):
+            add('error', path, f'含“{word}”：不得给出投资建议或收益判断')
+        for word in matches(HYPE, value):
+            add('warning', path, f'含“{word}”：避免渲染性或带交易含义的措辞')
         if analysis:
-            for word in CREDIT_FACT:
-                if word in value:
-                    add('warning', path, f'分析文字含“{word}”：只可引用原文已披露的口径，不得推断授信或放款安排')
+            for word in matches(CREDIT_FACT, value):
+                add('warning', path, f'分析文字含“{word}”：只可引用原文已披露的口径，不得推断授信或放款安排')
         if process:
             for pattern in PROCESS_NOTES:
                 found = re.search(pattern, value)
@@ -558,6 +588,7 @@ def lint_report(data):
                     add('error', path, f'读者正文含编制说明“{found.group(0)}”：改写reader_summary/reader_analysis，原说明留在summary/analysis')
 
     def has_process_note(value):
+        value = _INVISIBLE.sub('', value)
         return any(re.search(pattern, value) for pattern in PROCESS_NOTES)
 
     items = data['items']
@@ -575,7 +606,7 @@ def lint_report(data):
         add('warning', '$.summary', '有已核实事项但未编制一句话速览')
     if summary:
         value = summary['text'].strip()
-        if COUNT_SUMMARY.search(value):
+        if COUNT_SUMMARY.search(_INVISIBLE.sub('', value)):
             add('error', '$.summary.text', '速览不得以条数或来源构成充当摘要，应写具体主体、变化与状态')
         if len(value) < 40 or len(value) > 160:
             add('warning', '$.summary.text', f'速览{len(value)}字，建议60至140字')
@@ -595,8 +626,11 @@ def lint_report(data):
             add('warning', p + '.title', f'与{titles[title]}标题重复，确认是否同一事件应合并')
         titles.setdefault(title, p)
         scan(title, p + '.title', process=True)
+        scan(item['section'], p + '.section', process=True)
         for key in ('theme', 'stage', 'topic', 'region', 'enterprise'):
             scan(item.get(key, ''), f'{p}.{key}')
+        for j, source in enumerate(item['sources']):
+            scan(source['name'], f'{p}.sources[{j}].name')
         missing = [key for key in ('theme', 'stage', 'publisher_type') if key not in item]
         if missing:
             add('warning', p, '缺少分类字段：' + '、'.join(missing) + '；新编报告应逐条填齐')
@@ -612,6 +646,8 @@ def lint_report(data):
         scan(item['analysis'], p + '.analysis', analysis=True)
         if 'reader_analysis' in item:
             scan(item['reader_analysis'], p + '.reader_analysis', process=True, analysis=True)
+        elif has_process_note(item['analysis']):
+            add('warning', p + '.analysis', '分析含技术说明且未编制reader_analysis，页面“研究关注”会直接显示这些说明')
         if item['event_date'] and item['event_date'] > iso_datetime(item['published_at'], p + '.published_at').date().isoformat():
             add('info', p + '.event_date', '事件日晚于发布日：确认是否为计划里程碑，计划事项应写入正文并标“计划”')
     if len(items) >= 6 and len(themes) > len(items) * 0.7:
@@ -677,6 +713,13 @@ def main(argv=None):
     lint.add_argument('--strict', action='store_true', help='有warning时也返回1')
     sub.add_parser('options')
     args = parser.parse_args(argv)
+    for stream in (sys.stdout, sys.stderr):
+        # 非UTF-8控制台（如英文Windows）下用\uXXXX转义输出，JSON仍然有效，不因编码报错。
+        if hasattr(stream, 'reconfigure'):
+            try:
+                stream.reconfigure(errors='backslashreplace')
+            except (ValueError, OSError):
+                pass
     try:
         if args.command == 'validate-config':
             result = validate_config(load_json(args.path))
@@ -703,6 +746,10 @@ def main(argv=None):
         return 0
     except (ValidationError, RecursionError) as exc:
         print(str(exc) if isinstance(exc, ValidationError) else '$: JSON嵌套过深', file=sys.stderr)
+        return 2
+    except Exception:
+        # 不输出可能含本机路径的回溯；结构校验已通过但渲染失败时视为工具缺陷。
+        print('$: 内部错误，未生成输出；请保留输入文件并反馈', file=sys.stderr)
         return 2
 
 

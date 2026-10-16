@@ -3,6 +3,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
+import re
 
 TZ8 = timezone(timedelta(hours=8))
 WEEKDAYS = '一二三四五六日'
@@ -12,6 +13,7 @@ PUBLISHER_SLOTS = {'政府资讯': 1, '企业资讯': 2, '其他来源': 3}
 SERIES = {'daily': '每日观察', 'weekly': '周度观察', 'monthly': '月度观察', 'special': '专题观察'}
 PARTIAL = {'daily': '部分日报', 'weekly': '部分周报', 'monthly': '部分月报', 'special': '专题观察（进行中）'}
 MAX_SEGMENTS = 4
+METHOD_LABELS = {'live_public': '当期公开采集', 'aggregate_only': '仅汇总已有记录', 'backfill_public': '补采公开历史资料'}
 CHARTS = {
     'publisher': ('来源构成', '原始披露主体', ''),
     'theme': ('内容主题', '本期关注主题', ''),
@@ -30,6 +32,8 @@ def esc(value):
 
 
 def moment(value):
+    # 与briefing_tool.normalize_fraction一致：补齐小数秒，兼容Python 3.10。
+    value = re.sub(r'(?<=:\d{2})\.(\d{1,6})', lambda m: '.' + m.group(1).ljust(6, '0'), value, count=1)
     return datetime.fromisoformat(value.replace('Z', '+00:00')).astimezone(TZ8)
 
 
@@ -89,8 +93,9 @@ def period_info(data):
     elif kind == 'monthly':
         full_end = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
     else:
-        full_end = end + timedelta(days=1) if (end.hour, end.minute, end.second, end.microsecond) != (0, 0, 0, 0) else end
-    partial = end < full_end
+        full_end = end
+    # 专题不在00:00结束即为截至发稿的进行中周期；不做日期加法，避免9999年边界溢出。
+    partial = end < full_end or (kind == 'special' and (end.hour, end.minute, end.second, end.microsecond) != (0, 0, 0, 0))
     last = end - timedelta(microseconds=1)
     if kind == 'daily':
         span = cn_date(start) + '发布'
@@ -165,12 +170,14 @@ def ranked(counter, muted=None):
 
 
 def folded(counter, muted=None):
+    """返回(名称, 数量, 类型)：row为普通类别，rest为折叠合计（不画条、不参与比例尺），muted为未分类。"""
     rows, tail = ranked(counter, muted)
     limit = MAX_BARS - len(tail)
+    result = [(name, value, 'row') for name, value in rows]
     if len(rows) > limit:
         rest = rows[limit - 1:]
-        rows = rows[:limit - 1] + [(f'其余{len(rest)}项', sum(value for _, value in rest))]
-    return [(name, value, False) for name, value in rows] + [(name, value, True) for name, value in tail]
+        result = result[:limit - 1] + [(f'其余{len(rest)}项合计', sum(value for _, value in rest), 'rest')]
+    return result + [(name, value, 'muted') for name, value in tail]
 
 
 def publisher_rows(counter):
@@ -207,13 +214,14 @@ def stack_chart(counter):
 
 def bar_chart(key, counter):
     rows = folded(counter, MUTED.get(key))
-    top = max(value for _, value, _ in rows)
+    top = max(value for _, value, kind in rows if kind != 'rest')
     label = CHARTS[key][1] + '：' + '；'.join(f'{name}{value}条' for name, value, _ in rows)
     parts = ['<figure class="chart chart-bars" aria-label="' + esc(label) + '">', caption(key), '<ol class="bars">']
-    for name, value, muted in rows:
-        width = f'{value / top * 100:.2f}'
-        parts.append('<li' + (' class="muted"' if muted else '') + ' title="' + esc(f'{name}：{value}条') + '"><span class="bar-label">' + esc(name)
-                     + '</span><span class="bar-track"><span class="bar-fill" style="width:' + width + '%"></span></span><b class="bar-value">' + str(value) + '</b></li>')
+    for name, value, kind in rows:
+        fill = '' if kind == 'rest' else '<span class="bar-fill" style="width:' + f'{value / top * 100:.2f}' + '%"></span>'
+        parts.append('<li' + ('' if kind == 'row' else ' class="' + ('muted rest' if kind == 'rest' else 'muted') + '"') + ' title="'
+                     + esc(f'{name}：{value}条') + '"><span class="bar-label">' + esc(name) + '</span><span class="bar-track">' + fill
+                     + '</span><b class="bar-value">' + str(value) + '</b></li>')
     parts.append('</ol></figure>')
     return ''.join(parts)
 
@@ -336,11 +344,11 @@ def verified_label(item):
 
 
 def reader_text(item):
-    return item.get('reader_summary') or item['summary']
+    return (item.get('reader_summary') or item['summary']).strip()
 
 
 def reader_analysis(item):
-    return item.get('reader_analysis', item['analysis'])
+    return item.get('reader_analysis', item['analysis']).strip()
 
 
 def subgroup_of(item):
@@ -397,12 +405,12 @@ def memo_item(item, anchor):
     analysis = reader_analysis(item)
     if analysis:
         parts.append('<p class="memo-analysis"><b>研究关注：</b>' + esc(analysis) + '</p>')
-    meta = [('地区', item['region']), ('阶段', item.get('stage', '')), ('主题', item.get('theme', '')), ('企业', item['enterprise']),
-            ('事件日期', item['event_date'] or '未披露')]
-    parts.append('<p class="memo-meta">' + '　'.join(label + '：' + esc(value) for label, value in meta if value) + '</p>')
-    sources = '；'.join('<a href="' + esc(source['url']) + '" rel="noopener noreferrer">' + esc(source['name']) + '</a>（'
-                       + esc(moment(source['published_at']).strftime('%Y-%m-%d')) + '发布）' for source in item['sources'])
-    parts.append('<p class="memo-source">来源：' + sources + '　' + verified_label(item) + '</p></article>')
+    meta = [('地区', esc(item['region'])), ('阶段', esc(item.get('stage', ''))), ('主题', esc(item.get('theme', ''))),
+            ('企业', esc(item['enterprise'])), ('事件日期', '<span class="nobr">' + esc(item['event_date'] or '未披露') + '</span>')]
+    parts.append('<p class="memo-meta">' + '　'.join(label + '：' + value for label, value in meta if value) + '</p>')
+    sources = '；'.join('<a href="' + esc(source['url']) + '" rel="noopener noreferrer">' + esc(source['name']) + '</a><span class="nobr">（'
+                       + esc(moment(source['published_at']).strftime('%Y-%m-%d')) + '发布）</span>' for source in item['sources'])
+    parts.append('<p class="memo-source">来源：' + sources + '　<span class="nobr">' + verified_label(item) + '</span></p></article>')
     return ''.join(parts)
 
 
@@ -453,7 +461,9 @@ def features(data, anchors, info, layout, chapter):
 
 def appendix(data, ordered, anchors, audience_label):
     period, coverage = data['period'], data['coverage']
-    parts = ['<section class="appendix"><details><summary>完整来源与核验记录</summary><div class="details-body">']
+    parts = ['<section class="appendix">']
+    if ordered:
+        parts.append('<details><summary>完整来源与核验记录</summary><div class="details-body">')
     for item in ordered:
         parts.append('<section class="evidence-record"><h3><a href="#' + anchors[item['id'].strip()] + '">' + esc(item['title']) + '</a></h3><p>事项ID：' + esc(item['id'])
                      + '<br>核验标记：' + esc(item['verification']) + '<br>事项发布：' + esc(item['published_at']) + '<br>事件日期：' + esc(item['event_date'] or '未披露') + '</p>')
@@ -462,11 +472,13 @@ def appendix(data, ordered, anchors, audience_label):
             parts.append('<li><a href="' + esc(source['url']) + '" rel="noopener noreferrer">' + esc(source['name']) + '</a><p>原文：' + esc(source['url'])
                          + '<br>发布：' + esc(source['published_at']) + '<br>检索：' + esc(source['retrieved_at']) + '</p></li>')
         parts.append('</ol></section>')
-    parts.append('</div></details><details id="run-notes"><summary>编制范围、覆盖缺口与运行记录</summary><div class="details-body"><p>完整标题：' + esc(data['title'])
+    if ordered:
+        parts.append('</div></details>')
+    parts.append('<details id="run-notes"><summary>编制范围、覆盖缺口与运行记录</summary><div class="details-body"><p>完整标题：' + esc(data['title'])
                  + '<br>编制范围：' + esc(data['config_summary']) + '<br>阅读视角：' + esc(audience_label) + '（' + esc(data['audience']) + '）<br>时区：Asia/Shanghai</p><p>周期起点：'
                  + esc(period['start']) + '<br>周期终点（不含）：' + esc(period['end_exclusive']) + '<br>信息截止：' + esc(period['cutoff']) + '<br>日期覆盖：'
                  + esc(coverage['available_days']) + '/' + esc(coverage['expected_days']) + ' 天<br>资料策略：'
-                 + esc('仅汇总已有记录' if coverage['method'] == 'aggregate_only' else '补采公开历史资料') + '</p>')
+                 + esc(METHOD_LABELS[coverage['method']]) + '</p>')
     if coverage['gaps']:
         parts.append('<h3>覆盖缺口</h3><ul>' + ''.join('<li>' + esc(gap) + '</li>' for gap in coverage['gaps']) + '</ul>')
     parts.append('</div></details></section>')

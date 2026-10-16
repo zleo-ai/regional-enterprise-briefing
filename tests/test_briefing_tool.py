@@ -1114,6 +1114,161 @@ class ReviewRegressionTests(unittest.TestCase):
         tablet = css.split('@media(max-width:900px){', 1)[1].split('}\n@media', 1)[0]
         self.assertIn('.layout-compact .charts{grid-template-columns:1fr}', tablet)
 
+
+class SecondReviewRegressionTests(unittest.TestCase):
+    """第二轮多维审查确认的问题回归。"""
+
+    def lint_levels(self, data):
+        return [(f['level'], f['path']) for f in tool.lint_report(data)['findings']]
+
+    def clean(self):
+        data = report()
+        data['items'][0].update(theme='先进制造', stage='公示', publisher_type='gov')
+        return data
+
+    def test_padded_timestamps_and_urls_are_rejected_not_crashing(self):
+        for setter in (lambda d: d['period'].update(cutoff=d['period']['cutoff'] + ' '),
+                       lambda d: d['items'][0].update(published_at=' ' + d['items'][0]['published_at']),
+                       lambda d: d['items'][0]['sources'][0].update(url='　https://example.com/a'),
+                       lambda d: d['items'][0].update(event_date='2024-02-29 ')):
+            data = report()
+            setter(data)
+            with self.assertRaises(tool.ValidationError):
+                tool.render_report(data)
+
+    def test_invisible_and_bidi_characters_are_rejected(self):
+        for value in ('建议​买入', '示例省‮', '甲⁧乙', '﻿标题', '软­连字'):
+            data = report()
+            data['items'][0]['region'] = value
+            with self.subTest(value=repr(value)), self.assertRaisesRegex(tool.ValidationError, '不可见格式字符'):
+                tool.validate_report(data)
+
+    def test_fractional_seconds_parse_identically(self):
+        value = tool.compute_window('daily', '2026-10-15T07:00:00.5+08:00')
+        self.assertEqual(value['cutoff'], '2026-10-15T07:00:00.500000+08:00')
+        data = report()
+        data['period']['cutoff'] = '2024-03-01T00:00:00.25+08:00'
+        self.assertIn('公开事实', tool.render_report(data))
+
+    def test_window_output_pastes_into_report_period(self):
+        value = tool.compute_window('weekly', '2024-03-06T09:00:00+08:00')
+        self.assertEqual(set(value), {'start', 'end_exclusive', 'cutoff'})
+
+    def test_special_in_progress_cannot_end_at_midnight(self):
+        with self.assertRaisesRegex(tool.ValidationError, '00:00'):
+            tool.compute_window('special', '2026-10-15T00:00:00+08:00', '2026-10-01/2026-10-31')
+        value = tool.compute_window('special', '2026-11-01T00:00:00+08:00', '2026-10-01/2026-10-31')
+        self.assertEqual(value['end_exclusive'], '2026-11-01T00:00:00+08:00')
+
+    def test_country_name_must_be_china(self):
+        value = config()
+        value.update(regions=[{'name': '全国', 'level': 'country'}], topics=['储能'], scope_mode='all')
+        with self.assertRaisesRegex(tool.ValidationError, '中国'):
+            tool.validate_config(value)
+
+    def test_count_templates_in_varied_wording(self):
+        data = self.clean()
+        for text in ('本期共收录12条已核实事项，主要分布在先进制造、新能源和生物医药领域。', '本期收录12条公开信息，政府发布8条，企业公告4条。',
+                     '本周共核实事项12条，主要集中在制造业。', '本期共12项，其中政策文件5项、项目动态4项。', '本期共精选12条区域要闻，政策类5条。'):
+            data['summary'] = {'text': text, 'evidence_ids': ['item-1']}
+            with self.subTest(text=text):
+                self.assertIn(('error', '$.summary.text'), self.lint_levels(data))
+        for text in ('本月共有3条新规施行，涉及数据要素、低空经济和营商环境，均自印发之日起执行，配套细则另行公布。',
+                     '本次修订新增鼓励类条目32条，删除限制类条目5条，自2026年1月1日起施行，此前已立项项目按原目录执行。'):
+            data['summary'] = {'text': text, 'evidence_ids': ['item-1']}
+            with self.subTest(text=text):
+                self.assertNotIn(('error', '$.summary.text'), self.lint_levels(data))
+
+    def test_factual_policy_language_is_not_an_error(self):
+        for text in ('省农业农村厅印发生猪目标价格保险试点方案，对参保养殖户给予70%保费补贴。',
+                     '区委书记带队上门拜访辖区重点企业，现场协调项目用地问题。',
+                     '市金融局提示警惕“稳赚不赔”非法集资宣传。',
+                     '五部门印发措施，要求辖内银行满足民营企业合理贷款需求。',
+                     '规上工业企业盈利好转，下游企业盈利空间收窄。'):
+            data = self.clean()
+            data['items'][0]['reader_summary'] = text
+            with self.subTest(text=text):
+                self.assertEqual([f for f in tool.lint_report(data)['findings'] if f['path'].endswith('reader_summary')], [])
+
+    def test_advice_and_inference_phrasings_are_caught_in_analysis(self):
+        for text in ('维持“增持”评级，投资者可适当加仓。', '股价有望迎来估值修复，可逢低布局。', '该企业经营稳健，具备一定授信潜力。',
+                     '项目资金需求较大，可作为对公业务切入点。', '建议客户经理尽快跟进项目。', '建议上门拜访企业财务负责人。'):
+            data = self.clean()
+            data['items'][0]['reader_analysis'] = text
+            with self.subTest(text=text):
+                self.assertIn(('error', '$.items[0].reader_analysis'), self.lint_levels(data))
+
+    def test_more_process_notes_and_fields_are_scanned(self):
+        data = self.clean()
+        data['items'][0]['reader_summary'] = '（检索时间：2024年2月29日）项目进入环评公示。'
+        self.assertIn(('error', '$.items[0].reader_summary'), self.lint_levels(data))
+        data = self.clean()
+        data['items'][0]['section'] = '政府资讯·营销机会与重磅项目'
+        data['items'][0]['sources'][0]['name'] = '某行客户经理可上门对接'
+        found = self.lint_levels(data)
+        self.assertIn(('error', '$.items[0].section'), found)
+        self.assertIn(('warning', '$.items[0].section'), found)
+        self.assertIn(('error', '$.items[0].sources[0].name'), found)
+        data = self.clean()
+        data['items'][0]['analysis'] = '抓取时间为10月14日，00:00为编码占位。'
+        self.assertIn(('warning', '$.items[0].analysis'), self.lint_levels(data))
+
+    def test_folded_bucket_neither_draws_nor_sets_scale(self):
+        data = multi_report(10)
+        for n, item in enumerate(data['items']):
+            item['theme'] = f'主题{n}'
+        block = tool.render_report(data).split('<figure class="chart chart-bars"', 1)[1].split('</figure>', 1)[0]
+        rest = re.search(r'<li class="muted rest"[^>]*>(.*?)</li>', block).group(1)
+        self.assertIn('其余4项合计', rest)
+        self.assertNotIn('bar-fill', rest)
+        self.assertEqual(set(re.findall(r'width:([\d.]+)%', block)), {'100.00'})
+
+    def test_blank_analysis_and_empty_appendix(self):
+        data = report()
+        data['items'][0]['analysis'] = '   '
+        self.assertNotIn('class="analysis"', tool.render_report(data))
+        data = report()
+        data.update(status='observation', items=[])
+        rendered = tool.render_report(data)
+        self.assertNotIn('完整来源与核验记录', rendered)
+        self.assertIn('id="run-notes"', rendered)
+
+    def test_memo_keeps_dates_and_labels_unbroken(self):
+        rendered = tool.render_report(report(), layout='memo')
+        self.assertIn('<span class="nobr">（2024-02-29发布）</span>', rendered)
+        self.assertIn('<span class="nobr">一手来源已核实</span>', rendered)
+        self.assertIn('事件日期：<span class="nobr">2024-02-29</span>', rendered)
+
+    def test_live_public_method(self):
+        data = report()
+        data['coverage']['method'] = 'live_public'
+        self.assertIn('资料策略：当期公开采集', tool.render_report(data))
+        data['coverage']['method'] = 'live'
+        with self.assertRaises(tool.ValidationError):
+            tool.validate_report(data)
+
+    def test_unexpected_render_failure_is_contained(self):
+        original = tool.render_report
+        with tempfile.TemporaryDirectory() as root:
+            source, target = Path(root) / 'data.json', Path(root) / 'out.html'
+            source.write_text(json.dumps(report()), encoding='utf-8')
+            tool.render_report = lambda *args: (_ for _ in ()).throw(RuntimeError('/home/secret/path'))
+            try:
+                with contextlib.redirect_stderr(io.StringIO()) as err:
+                    self.assertEqual(tool.main(['render', '--data', str(source), '--out', str(target)]), 2)
+            finally:
+                tool.render_report = original
+            self.assertNotIn('secret', err.getvalue())
+            self.assertFalse(target.exists())
+
+    def test_css_wrapping_compact_note_and_print_details(self):
+        css = (ROOT / 'assets' / 'report.css').read_text(encoding='utf-8')
+        self.assertIn('.page{overflow-wrap:anywhere;', css)
+        self.assertIn('.layout-compact .stats dd:not(.stat-note){font-size:22px}', css)
+        self.assertIn('details::details-content{content-visibility:visible', css)
+        self.assertIn('.item-grid>.item{padding:18px 16px}', css)
+        self.assertTrue(tool.sys.dont_write_bytecode)
+
 class ExampleFileTests(unittest.TestCase):
     def test_example_configs_validate(self):
         paths = sorted((ROOT / 'examples').glob('config-*.json'))

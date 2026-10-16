@@ -21,7 +21,8 @@
         "regions为苏州市（parent江苏省、level city）",
         "周期为运行日前一自然日00:00至当日00:00（北京时间）",
         "未追问地区以外的非必要信息",
-        "交付HTML与04-final.json，摘要有evidence_ids"
+        "交付HTML与04-final.json，摘要有evidence_ids",
+        "coverage.method为live_public"
       ]
     },
     {
@@ -34,7 +35,8 @@
         "region_label或范围说明出现“长三角”",
         "topics含新能源汽车且scope_mode为all或require_topic_match为true",
         "audience为investment_promotion",
-        "周期为上一完整ISO周"
+        "周期为上一完整ISO周",
+        "本地无该周存档时按公开补采执行，coverage.method为backfill_public并在首屏注明事后检索"
       ]
     },
     {
@@ -65,6 +67,7 @@
       "expected_output": "专题简报special，要报版memo",
       "files": [],
       "expectations": [
+        "未追问地区；regions为country“中国”，enterprises含该公司，scope_mode为all",
         "kind为special，周期为用户所述三个月",
         "presentation.layout为memo",
         "时间线上每个节点引用本期已核实ID",

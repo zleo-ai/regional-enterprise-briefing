@@ -14,7 +14,7 @@
   "coverage": {
     "expected_days": 1,
     "available_days": 1,
-    "method": "aggregate_only",
+    "method": "live_public",
     "gaps": [
       "演示：企业公告仅检索了两个交易所披露渠道，地市政府网站未全部检索。"
     ],

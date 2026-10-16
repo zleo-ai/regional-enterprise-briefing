@@ -44,14 +44,14 @@
 | 图表键 | 形式 | 默认出现在 |
 |---|---|---|
 | `publisher` 原始披露主体 | 分段条（部分与整体）+图例数量与百分比 | 所有含图版式 |
-| `theme` 本期关注主题 | 横向条形图，按数量降序，未分类灰色排最后 | standard |
+| `theme` 本期关注主题 | 横向条形图，按数量降序，未分类灰色排最后；“其余N项合计”只显示数字不画条、不参与比例尺 | standard |
 | `region` 事项所在地区 | 横向条形图 | standard的周报、月报、专题 |
 | `enterprise` 涉及企业 | 横向条形图（只统计enterprise非空的事项） | standard的周报、月报、专题 |
 | `stage` 事项所处阶段 | 横向条形图，按数量排序并注明“不构成漏斗” | 仅显式指定 |
 
 - 晨报默认只出 `publisher` 和 `theme`；速读版只出 `publisher`；要报版默认不出图。
 - 某维度少于2类不成图；除来源构成外，事项少于3条不成图。
-- 超过7类时折叠为“其余N项”，完整分类见图下“图表数据表”。
+- 超过7类时折叠为“其余N项合计”（只列数字，不画条），完整分类见图下“图表数据表”。
 - 条形图同一颜色（单系列），不按数值深浅上色；来源构成三色固定对应政府、企业、其他，跨报告不变。
 - 标准版、速读版始终在图表上方显示概况数字（已核实事项、一手来源核实、内容主题数、日期覆盖），未分类条数写在主题数下方，不隐藏；要报版默认以一行文字概况代替，指定charts后显示数字条和图表。
 - 来源构成三色只用于政府资讯、企业资讯、其他来源；缺少publisher_type的旧档按分区名统计，其他类别一律中性灰，超过4段时折叠为“其余N类”。
@@ -63,11 +63,13 @@
 
 ## 6. 命令
 
+`$SKILL` 为技能根目录，`$RUN` 为用户工作目录下的本次运行目录；输出只写入 `$RUN`。
+
 ```bash
-python3 scripts/briefing_tool.py options                       # 查看可用版式、配色、图表与阅读视角
-python3 scripts/briefing_tool.py render --data 04-final.json --out 简报.html --layout compact --theme navy
-python3 scripts/briefing_tool.py render --data 04-final.json --out 简报-浅色.html --color-scheme light
-python3 scripts/export_png.py --data 04-final.json --out 长图.png --layout compact
+python3 "$SKILL/scripts/briefing_tool.py" options    # 查看可用版式、配色、图表与阅读视角
+python3 "$SKILL/scripts/briefing_tool.py" render --data "$RUN/04-final.json" --out "$RUN/简报.html" --layout compact --theme navy
+python3 "$SKILL/scripts/briefing_tool.py" render --data "$RUN/04-final.json" --out "$RUN/简报-浅色.html" --color-scheme light
+python3 "$SKILL/scripts/export_png.py" --data "$RUN/04-final.json" --out "$RUN/长图.png" --layout compact
 ```
 
 模板预览：`examples/gallery/` 下的三份虚构演示数据（`demo-daily.json` 速读版、`demo-weekly.json` 标准版、`demo-special.json` 要报版）可用任意版式和配色渲染查看效果。演示数据中的主体、数字和链接均为虚构，不得作为事实引用。
