@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "audience": "province",
+  "regions": [{"name": "江西省", "parent": "中国", "level": "province"}]
+}
